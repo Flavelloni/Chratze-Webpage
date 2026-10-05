@@ -1,143 +1,1318 @@
 package io.github.flavelloni.chratze.pages
 
 import androidx.compose.runtime.Composable
-import com.varabyte.kobweb.compose.css.StyleVariable
-import com.varabyte.kobweb.compose.foundation.layout.Box
-import com.varabyte.kobweb.compose.foundation.layout.Column
-import com.varabyte.kobweb.compose.foundation.layout.Row
-import com.varabyte.kobweb.compose.ui.Modifier
-import com.varabyte.kobweb.compose.ui.graphics.Color
-import com.varabyte.kobweb.compose.ui.graphics.Colors
-import com.varabyte.kobweb.compose.ui.modifiers.*
-import com.varabyte.kobweb.compose.ui.toAttrs
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import com.varabyte.kobweb.core.Page
 import com.varabyte.kobweb.core.data.add
 import com.varabyte.kobweb.core.init.InitRoute
 import com.varabyte.kobweb.core.init.InitRouteContext
 import com.varabyte.kobweb.core.layout.Layout
-import com.varabyte.kobweb.core.rememberPageContext
-import com.varabyte.kobweb.silk.components.forms.Button
-import com.varabyte.kobweb.silk.components.navigation.Link
-import com.varabyte.kobweb.silk.components.text.SpanText
-import com.varabyte.kobweb.silk.style.CssStyle
-import com.varabyte.kobweb.silk.style.base
-import com.varabyte.kobweb.silk.style.breakpoint.Breakpoint
-import com.varabyte.kobweb.silk.style.breakpoint.displayIfAtLeast
-import com.varabyte.kobweb.silk.style.toAttrs
-import com.varabyte.kobweb.silk.style.toModifier
-import com.varabyte.kobweb.silk.theme.colors.ColorMode
-import com.varabyte.kobweb.silk.theme.colors.ColorPalettes
-import org.jetbrains.compose.web.css.cssRem
-import org.jetbrains.compose.web.css.fr
-import org.jetbrains.compose.web.css.px
-import org.jetbrains.compose.web.css.vh
-import org.jetbrains.compose.web.dom.Div
-import org.jetbrains.compose.web.dom.Text
-import io.github.flavelloni.chratze.HeadlineTextStyle
-import io.github.flavelloni.chratze.SubheadlineTextStyle
 import io.github.flavelloni.chratze.components.layouts.PageLayoutData
-import io.github.flavelloni.chratze.toSitePalette
+import kotlin.random.Random
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import org.jetbrains.compose.web.dom.Button
+import org.jetbrains.compose.web.dom.Div
+import org.jetbrains.compose.web.dom.H1
+import org.jetbrains.compose.web.dom.Img
+import org.jetbrains.compose.web.dom.Style
+import org.jetbrains.compose.web.dom.Text
 
-// Container that has a tagline and grid on desktop, and just the tagline on mobile
-val HeroContainerStyle = CssStyle {
-    base { Modifier.fillMaxWidth().gap(2.cssRem) }
-    Breakpoint.MD { Modifier.margin { top(20.vh) } }
+private enum class SwissSuit(
+    val assetPath: String,
+    val ink: String,
+) {
+    Eichle("/suits/eichle.png", "#1f2512"),
+    Rose("/suits/rose.png", "#2a2314"),
+    Schilte("/suits/schilte.png", "#171717"),
+    Schelle("/suits/schelle.png", "#171717"),
 }
 
-// A demo grid that appears on the homepage because it looks good
-val HomeGridStyle = CssStyle.base {
-    Modifier
-        .gap(0.5.cssRem)
-        .width(70.cssRem)
-        .height(18.cssRem)
+private enum class Seat(val label: String) {
+    User("You"),
+    Player1("Player 1"),
+    Player2("Player 2"),
+    Player3("Player 3"),
 }
 
-private val GridCellColorVar by StyleVariable<Color>()
-val HomeGridCellStyle = CssStyle.base {
-    Modifier
-        .backgroundColor(GridCellColorVar.value())
-        .boxShadow(blurRadius = 0.6.cssRem, color = GridCellColorVar.value())
-        .borderRadius(1.cssRem)
+private enum class GamePhase {
+    Idle,
+    Dealing,
+    CallingChratze,
+    CallingAlong,
+    Exchanging,
+    Playing,
+    Collecting,
+    Finished,
 }
 
-@Composable
-private fun GridCell(color: Color, row: Int, column: Int, width: Int? = null, height: Int? = null) {
-    Div(
-        HomeGridCellStyle.toModifier()
-            .setVariable(GridCellColorVar, color)
-            .gridItem(row, column, width, height)
-            .toAttrs()
-    )
+private data class SwissCard(val rank: String, val suit: SwissSuit) {
+    val id = "${suit.name}-$rank"
 }
 
+private data class PlayedCard(val card: SwissCard, val seat: Seat)
+
+private data class GameState(
+    val phase: GamePhase = GamePhase.Idle,
+    val hands: Map<Seat, List<SwissCard>> = emptyHands(),
+    val drawPile: List<SwissCard> = deck,
+    val discardPile: List<SwissCard> = emptyList(),
+    val trump: SwissCard? = null,
+    val trick: List<PlayedCard> = emptyList(),
+    val dealer: Seat = Seat.User,
+    val chratzer: Seat? = null,
+    val leader: Seat = Seat.User,
+    val active: Seat = Seat.User,
+    val activePlayers: Set<Seat> = seats.toSet(),
+    val outPlayers: Set<Seat> = emptySet(),
+    val scores: Map<Seat, Int> = emptyScores(),
+    val speechBubbles: Map<Seat, String> = emptyMap(),
+    val selectedExchangeIds: Set<String> = emptySet(),
+    val roundMessage: String = "Start a new round.",
+)
+
+private val seats = listOf(Seat.User, Seat.Player1, Seat.Player2, Seat.Player3)
+private val counterClockwiseSeats = listOf(Seat.User, Seat.Player3, Seat.Player2, Seat.Player1)
+private val ranks = listOf("6", "7", "8", "9", "10", "Under", "Ober", "Koenig", "Ass")
+private val deck = SwissSuit.entries.flatMap { suit -> ranks.map { rank -> SwissCard(rank, suit) } }
 
 @InitRoute
 fun initHomePage(ctx: InitRouteContext) {
-    ctx.data.add(PageLayoutData("Home"))
+    ctx.data.add(PageLayoutData("Game Setup"))
 }
 
 @Page
 @Layout(".components.layouts.PageLayout")
 @Composable
 fun HomePage() {
-    Row(HeroContainerStyle.toModifier()) {
-        Box {
-            val sitePalette = ColorMode.current.toSitePalette()
+    var game by remember { mutableStateOf(GameState()) }
+    val scope = rememberCoroutineScope()
 
-            Column(Modifier.gap(2.cssRem)) {
-                Div(HeadlineTextStyle.toAttrs()) {
-                    SpanText(
-                        "Use this template as your starting point for ", Modifier.color(
-                            when (ColorMode.current) {
-                                ColorMode.LIGHT -> Colors.Black
-                                ColorMode.DARK -> Colors.White
-                            }
-                        )
-                    )
-                    SpanText(
-                        "Kobweb",
-                        Modifier
-                            .color(sitePalette.brand.accent)
-                            // Use a shadow so this light-colored word is more visible in light mode
-                            .textShadow(0.px, 0.px, blurRadius = 0.5.cssRem, color = Colors.Gray)
-                    )
-                }
-
-                Div(SubheadlineTextStyle.toAttrs()) {
-                    SpanText("You can read the ")
-                    Link("/about", "About")
-                    SpanText(" page for more information.")
-                }
-
-                val ctx = rememberPageContext()
-                Button(onClick = {
-                    // Change this click handler with your call-to-action behavior
-                    // here. Link to an order page? Open a calendar UI? Play a movie?
-                    // Up to you!
-                    ctx.router.tryRoutingTo("/about")
-                }, colorPalette = ColorPalettes.Blue) {
-                    Text("This could be your CTA")
-                }
+    Style {
+        Text(
+            """
+            @keyframes deal-pop {
+              from { transform: translateY(-18px) scale(.82); opacity: 0; }
+              to { transform: translateY(0) scale(1); opacity: 1; }
             }
-        }
-
-        Div(
-            HomeGridStyle
-            .toModifier()
-            .displayIfAtLeast(Breakpoint.MD)
-            .grid {
-                rows { repeat(3) { size(1.fr) } }
-                columns { repeat(5) { size(1.fr) } }
+            @keyframes user-card-to-center {
+              from { transform: translate(-50%, 185px) scale(1.15); opacity: .75; }
+              to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
             }
-            .toAttrs()
-        ) {
-            val sitePalette = ColorMode.current.toSitePalette()
-            GridCell(sitePalette.brand.primary, 1, 1, 2, 2)
-            GridCell(ColorPalettes.Monochrome._600, 1, 3)
-            GridCell(ColorPalettes.Monochrome._100, 1, 4, width = 2)
-            GridCell(sitePalette.brand.accent, 2, 3, width = 2)
-            GridCell(ColorPalettes.Monochrome._300, 2, 5)
-            GridCell(ColorPalettes.Monochrome._800, 3, 1, width = 5)
+            @keyframes player-card-to-center {
+              from { transform: translate(-50%, -145px) scale(.72); opacity: .7; }
+              to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            }
+            """.trimIndent()
+        )
+    }
+
+    Div({
+        attr(
+            "style",
+            """
+                display:flex;
+                flex-direction:column;
+                gap:24px;
+                width:100%;
+                padding:14px 0 42px;
+            """.trimIndent()
+        )
+    }) {
+        Header()
+        GameTable(
+            game = game,
+            onNewRoundClick = {
+                scope.launch {
+                    game = dealNewRound(game) { next -> game = next }
+                    game = advanceComputers(game) { next -> game = next }
+                }
+            },
+            onUserBid = { saysChratze ->
+                if (game.phase == GamePhase.CallingChratze && game.active == Seat.User) {
+                    scope.launch {
+                        game = userBid(game, saysChratze) { next -> game = next }
+                        game = advanceComputers(game) { next -> game = next }
+                    }
+                }
+            },
+            onUserJoin = { joins ->
+                if (game.phase == GamePhase.CallingAlong && game.active == Seat.User) {
+                    scope.launch {
+                        game = userJoin(game, joins) { next -> game = next }
+                        game = advanceComputers(game) { next -> game = next }
+                    }
+                }
+            },
+            onUserCardClick = { card ->
+                when {
+                    canUserSelectExchange(game, card) -> game = toggleExchangeSelection(game, card)
+                    canUserPlay(game, card) -> {
+                        scope.launch {
+                            game = playTurn(game, Seat.User, card) { next -> game = next }
+                            game = advanceComputers(game) { next -> game = next }
+                        }
+                    }
+                }
+            },
+            onUserExchangeConfirm = {
+                if (game.phase == GamePhase.Exchanging && game.active == Seat.User) {
+                    scope.launch {
+                        game = exchangeCards(game, Seat.User, game.selectedExchangeIds) { next -> game = next }
+                        game = advanceComputers(game) { next -> game = next }
+                    }
+                }
+            },
+        )
+    }
+}
+
+private fun emptyHands(): Map<Seat, List<SwissCard>> = seats.associateWith { emptyList() }
+
+private fun emptyScores(): Map<Seat, Int> = seats.associateWith { 0 }
+
+private suspend fun dealNewRound(previous: GameState, setGame: (GameState) -> Unit): GameState {
+    val shuffled = deck.shuffled(Random.Default)
+    val firstToAct = nextCounterClockwise(previous.dealer)
+    val dealOrder = counterClockwiseOrderFrom(firstToAct, seats.toSet())
+    var current = GameState(
+        phase = GamePhase.Dealing,
+        hands = emptyHands(),
+        drawPile = shuffled,
+        discardPile = emptyList(),
+        trump = null,
+        trick = emptyList(),
+        dealer = previous.dealer,
+        chratzer = null,
+        leader = firstToAct,
+        active = firstToAct,
+        activePlayers = seats.toSet(),
+        outPlayers = emptySet(),
+        scores = emptyScores(),
+        speechBubbles = emptyMap(),
+        selectedExchangeIds = emptySet(),
+        roundMessage = "${previous.dealer.label} deals.",
+    )
+    setGame(current)
+    delay(180)
+
+    repeat(4) {
+        dealOrder.forEach { seat ->
+            val card = current.drawPile.first()
+            current = current.copy(
+                hands = current.hands.plus(seat to current.hand(seat) + card),
+                drawPile = current.drawPile.drop(1),
+            )
+            setGame(current)
+            delay(90)
         }
     }
+
+    val trump = current.drawPile.first()
+    current = current.copy(
+        trump = trump,
+        drawPile = current.drawPile.drop(1),
+        phase = GamePhase.CallingChratze,
+        active = firstToAct,
+        leader = firstToAct,
+        roundMessage = "${firstToAct.label} starts: chratze or lose.",
+    )
+    setGame(current)
+    delay(260)
+    return current
+}
+
+private suspend fun advanceComputers(state: GameState, setGame: (GameState) -> Unit): GameState {
+    var current = state
+    var keepGoing = true
+
+    while (keepGoing) {
+        keepGoing = false
+
+        when {
+            current.phase == GamePhase.CallingChratze && current.active != Seat.User -> {
+                delay(520)
+                val saysChratze = Random.Default.nextDouble() < .34
+                current = applyBid(current, current.active, saysChratze, setGame)
+                keepGoing = current.phase != GamePhase.Finished && current.awaitingComputer()
+            }
+
+            current.phase == GamePhase.CallingAlong && current.active != Seat.User -> {
+                delay(520)
+                val joins = Random.Default.nextDouble() < .64
+                current = applyJoin(current, current.active, joins, setGame)
+                keepGoing = current.awaitingComputer()
+            }
+
+            current.phase == GamePhase.Exchanging && current.active != Seat.User -> {
+                delay(520)
+                val hand = current.hand(current.active)
+                val count = Random.Default.nextInt(minOf(3, hand.size) + 1)
+                val selected = hand.shuffled(Random.Default).take(count).map { it.id }.toSet()
+                current = exchangeCards(current, current.active, selected, setGame)
+                keepGoing = current.awaitingComputer()
+            }
+
+            current.phase == GamePhase.Playing && current.active != Seat.User && current.hand(current.active).isNotEmpty() -> {
+                delay(520)
+                val hand = current.hand(current.active)
+                val card = legalCards(hand, current.trick, current.trump!!.suit).random(Random.Default)
+                current = playTurn(current, current.active, card, setGame)
+                keepGoing = current.awaitingComputer()
+            }
+        }
+    }
+
+    return current
+}
+
+private fun GameState.awaitingComputer(): Boolean =
+    when (phase) {
+        GamePhase.CallingChratze,
+        GamePhase.CallingAlong,
+        GamePhase.Exchanging,
+        GamePhase.Playing,
+        -> active != Seat.User
+
+        else -> false
+    }
+
+private suspend fun userBid(
+    state: GameState,
+    saysChratze: Boolean,
+    setGame: (GameState) -> Unit,
+): GameState = applyBid(state, Seat.User, saysChratze, setGame)
+
+private suspend fun applyBid(
+    state: GameState,
+    seat: Seat,
+    saysChratze: Boolean,
+    setGame: (GameState) -> Unit,
+): GameState {
+    if (saysChratze) {
+        val next = nextCounterClockwise(seat)
+        val current = state.copy(
+            phase = if (next == seat) GamePhase.Exchanging else GamePhase.CallingAlong,
+            chratzer = seat,
+            active = next,
+            leader = seat,
+            activePlayers = setOf(seat),
+            speechBubbles = state.speechBubbles.plus(seat to "chratze"),
+            roundMessage = "${seat.label} says chratze. Others can call or fold.",
+        )
+        setGame(current)
+        return if (next == seat) current.startExchange(setGame) else current
+    }
+
+    val firstBidder = nextCounterClockwise(state.dealer)
+    val next = nextCounterClockwise(seat)
+    val current = state.copy(
+        active = next,
+        speechBubbles = state.speechBubbles.plus(seat to "lose"),
+        roundMessage = "${seat.label} says lose.",
+    )
+    setGame(current)
+
+    if (next == firstBidder) {
+        delay(520)
+        val finished = current.copy(
+            phase = GamePhase.Finished,
+            dealer = nextCounterClockwise(current.dealer),
+            active = nextCounterClockwise(current.dealer),
+            activePlayers = emptySet(),
+            roundMessage = "Nobody said chratze. The dealer button moves.",
+        )
+        setGame(finished)
+        return finished
+    }
+
+    return current
+}
+
+private suspend fun userJoin(
+    state: GameState,
+    joins: Boolean,
+    setGame: (GameState) -> Unit,
+): GameState = applyJoin(state, Seat.User, joins, setGame)
+
+private suspend fun applyJoin(
+    state: GameState,
+    seat: Seat,
+    joins: Boolean,
+    setGame: (GameState) -> Unit,
+): GameState {
+    val withDecision = if (joins) {
+        state.copy(
+            activePlayers = state.activePlayers + seat,
+            speechBubbles = state.speechBubbles.plus(seat to "chume mit"),
+            roundMessage = "${seat.label} calls.",
+        )
+    } else {
+        foldPlayer(
+            state.copy(
+                speechBubbles = state.speechBubbles.plus(seat to "ich bin weg"),
+                roundMessage = "${seat.label} folds.",
+            ),
+            seat,
+        )
+    }
+
+    val next = nextCounterClockwise(seat)
+    val current = if (next == withDecision.chratzer) {
+        withDecision.copy(active = withDecision.chratzer ?: seat)
+    } else {
+        withDecision.copy(active = next)
+    }
+    setGame(current)
+
+    return if (next == current.chratzer) {
+        delay(420)
+        current.startExchange(setGame)
+    } else {
+        current
+    }
+}
+
+private fun foldPlayer(state: GameState, seat: Seat): GameState =
+    state.copy(
+        hands = state.hands.plus(seat to emptyList()),
+        discardPile = state.discardPile + state.hand(seat),
+        activePlayers = state.activePlayers - seat,
+        outPlayers = state.outPlayers + seat,
+        selectedExchangeIds = if (seat == Seat.User) emptySet() else state.selectedExchangeIds,
+    )
+
+private suspend fun GameState.startExchange(setGame: (GameState) -> Unit): GameState {
+    val starter = chratzer ?: active
+    val current = copy(
+        phase = GamePhase.Exchanging,
+        active = starter,
+        leader = starter,
+        selectedExchangeIds = emptySet(),
+        roundMessage = "${starter.label} exchanges first.",
+    )
+    setGame(current)
+    return current
+}
+
+private suspend fun exchangeCards(
+    state: GameState,
+    seat: Seat,
+    selectedIds: Set<String>,
+    setGame: (GameState) -> Unit,
+): GameState {
+    val selected = state.hand(seat).filter { it.id in selectedIds }.take(3)
+    val kept = state.hand(seat).filterNot { card -> selected.any { it.id == card.id } }
+    val drawn = state.drawPile.take(selected.size)
+    val nextDrawPile = state.drawPile.drop(selected.size)
+    val nextActive = nextActiveCounterClockwise(seat, state.activePlayers)
+    val starter = state.chratzer ?: seat
+    val spoken = if (selected.isEmpty()) "keini" else "${selected.size} weg"
+
+    val exchanged = state.copy(
+        hands = state.hands.plus(seat to kept + drawn),
+        drawPile = nextDrawPile,
+        discardPile = state.discardPile + selected,
+        active = nextActive,
+        speechBubbles = state.speechBubbles.plus(seat to spoken),
+        selectedExchangeIds = emptySet(),
+        roundMessage = "${seat.label} exchanges ${selected.size}.",
+    )
+    setGame(exchanged)
+    delay(420)
+
+    if (nextActive == starter) {
+        val playing = exchanged.copy(
+            phase = GamePhase.Playing,
+            active = starter,
+            leader = starter,
+            trick = emptyList(),
+            speechBubbles = exchanged.speechBubbles.plus(starter to "spiel"),
+            roundMessage = "${starter.label} starts the game.",
+        )
+        setGame(playing)
+        return playing
+    }
+
+    return exchanged.copy(roundMessage = "${nextActive.label} may exchange cards.").also(setGame)
+}
+
+private suspend fun playTurn(
+    state: GameState,
+    seat: Seat,
+    card: SwissCard,
+    setGame: (GameState) -> Unit,
+): GameState {
+    val updatedHand = state.hand(seat).filterNot { it.id == card.id }
+    var current = state.copy(
+        hands = state.hands.plus(seat to updatedHand),
+        trick = state.trick + PlayedCard(card, seat),
+        active = nextActiveCounterClockwise(seat, state.activePlayers),
+        selectedExchangeIds = emptySet(),
+        speechBubbles = state.speechBubbles - seat,
+        roundMessage = "${seat.label} plays ${card.rankLabel()} ${card.suit.name}.",
+    )
+    setGame(current)
+    delay(380)
+
+    if (current.trick.size == current.activePlayers.size) {
+        val winner = trickWinner(current.trick, current.trump!!.suit)
+        current = current.copy(
+            phase = GamePhase.Collecting,
+            active = winner,
+            leader = winner,
+            scores = current.scores.plus(winner to current.score(winner) + 1),
+            roundMessage = "${winner.label} wins the trick.",
+        )
+        setGame(current)
+        delay(720)
+
+        val finished = current.activePlayers.all { current.hand(it).isEmpty() }
+        current = current.copy(
+            phase = if (finished) GamePhase.Finished else GamePhase.Playing,
+            dealer = if (finished) nextCounterClockwise(current.dealer) else current.dealer,
+            trick = emptyList(),
+            active = winner,
+            leader = winner,
+            roundMessage = if (finished) {
+                "Round complete. The dealer button moves."
+            } else {
+                "${winner.label} leads the next trick."
+            },
+        )
+        setGame(current)
+    }
+
+    return current
+}
+
+private fun canUserSelectExchange(game: GameState, card: SwissCard): Boolean =
+    game.phase == GamePhase.Exchanging &&
+        game.active == Seat.User &&
+        card in game.hand(Seat.User)
+
+private fun toggleExchangeSelection(game: GameState, card: SwissCard): GameState {
+    val selected = game.selectedExchangeIds
+    val updated = if (card.id in selected) {
+        selected - card.id
+    } else if (selected.size < 3) {
+        selected + card.id
+    } else {
+        selected
+    }
+    return game.copy(selectedExchangeIds = updated)
+}
+
+private fun canUserPlay(game: GameState, card: SwissCard): Boolean {
+    if (game.phase != GamePhase.Playing || game.active != Seat.User || game.trump == null) return false
+    if (Seat.User !in game.activePlayers) return false
+    return legalCards(game.hand(Seat.User), game.trick, game.trump.suit).any { it.id == card.id }
+}
+
+private fun legalCards(hand: List<SwissCard>, trick: List<PlayedCard>, trumpSuit: SwissSuit): List<SwissCard> {
+    val leadSuit = trick.firstOrNull()?.card?.suit ?: return hand
+    val sameSuit = hand.filter { it.suit == leadSuit }
+    if (sameSuit.isNotEmpty()) return sameSuit
+    val trumps = hand.filter { it.suit == trumpSuit }
+    if (trumps.isNotEmpty()) return trumps
+    return hand
+}
+
+private fun trickWinner(trick: List<PlayedCard>, trumpSuit: SwissSuit): Seat {
+    val trumps = trick.filter { it.card.suit == trumpSuit }
+    val candidates = if (trumps.isNotEmpty()) {
+        trumps
+    } else {
+        val leadSuit = trick.first().card.suit
+        trick.filter { it.card.suit == leadSuit }
+    }
+    return candidates.maxBy { rankValue(it.card.rank) }.seat
+}
+
+private fun rankValue(rank: String): Int = ranks.indexOf(rank)
+
+private fun nextCounterClockwise(seat: Seat): Seat =
+    counterClockwiseSeats[(counterClockwiseSeats.indexOf(seat) + 1) % counterClockwiseSeats.size]
+
+private fun nextActiveCounterClockwise(seat: Seat, activePlayers: Set<Seat>): Seat {
+    var next = nextCounterClockwise(seat)
+    while (next !in activePlayers) {
+        next = nextCounterClockwise(next)
+    }
+    return next
+}
+
+private fun counterClockwiseOrderFrom(first: Seat, included: Set<Seat>): List<Seat> {
+    val result = mutableListOf<Seat>()
+    var current = first
+    repeat(seats.size) {
+        if (current in included) result += current
+        current = nextCounterClockwise(current)
+    }
+    return result
+}
+
+private fun GameState.hand(seat: Seat): List<SwissCard> = hands[seat].orEmpty()
+
+private fun GameState.score(seat: Seat): Int = scores[seat] ?: 0
+
+@Composable
+private fun Header() {
+    Div({
+        attr(
+            "style",
+            """
+                display:flex;
+                flex-direction:column;
+                gap:10px;
+                max-width:760px;
+            """.trimIndent()
+        )
+    }) {
+        H1({
+            attr(
+                "style",
+                """
+                    margin:0;
+                    font-size:42px;
+                    line-height:1.05;
+                    font-weight:800;
+                    color:#17130f;
+                """.trimIndent()
+            )
+        }) {
+            Text("Chratze table")
+        }
+        Div({
+            attr(
+                "style",
+                """
+                    color:#64594f;
+                    font-size:17px;
+                    max-width:650px;
+                """.trimIndent()
+            )
+        }) {
+            Text("Deal, call chratze or lose, decide who comes along, exchange up to three cards, then play the tricks.")
+        }
+    }
+}
+
+@Composable
+private fun GameTable(
+    game: GameState,
+    onNewRoundClick: () -> Unit,
+    onUserBid: (Boolean) -> Unit,
+    onUserJoin: (Boolean) -> Unit,
+    onUserCardClick: (SwissCard) -> Unit,
+    onUserExchangeConfirm: () -> Unit,
+) {
+    Div({
+        attr(
+            "style",
+            """
+                position:relative;
+                width:min(100%, 980px);
+                height:720px;
+                margin:0 auto;
+            """.trimIndent()
+        )
+    }) {
+        Div({
+            attr(
+                "style",
+                """
+                    position:absolute;
+                    left:50%;
+                    top:51%;
+                    width:92%;
+                    height:74%;
+                    transform:translate(-50%, -50%);
+                    border-radius:50%;
+                    background:
+                        radial-gradient(circle at 50% 43%, rgba(255,255,255,.14), transparent 38%),
+                        linear-gradient(145deg, #3e8f63 0%, #236440 62%, #17462f 100%);
+                    border:10px solid #7a4d2c;
+                    box-shadow:0 28px 60px rgba(28,20,13,.28), inset 0 0 0 4px rgba(255,255,255,.16);
+                    z-index:0;
+                """.trimIndent()
+            )
+        })
+
+        TableSpot("left:9%; top:43%;") { DeckIcon(game.drawPile.size, game.phase != GamePhase.Idle) }
+        PlayerArea(
+            seat = Seat.Player1,
+            cardCount = game.hand(Seat.Player1).size,
+            score = game.score(Seat.Player1),
+            active = game.active,
+            dealer = game.dealer,
+            out = Seat.Player1 in game.outPlayers,
+            speech = game.speechBubbles[Seat.Player1],
+            position = "left:25%; top:22%;",
+        )
+        PlayerArea(
+            seat = Seat.Player2,
+            cardCount = game.hand(Seat.Player2).size,
+            score = game.score(Seat.Player2),
+            active = game.active,
+            dealer = game.dealer,
+            out = Seat.Player2 in game.outPlayers,
+            speech = game.speechBubbles[Seat.Player2],
+            position = "left:50%; top:12%;",
+        )
+        PlayerArea(
+            seat = Seat.Player3,
+            cardCount = game.hand(Seat.Player3).size,
+            score = game.score(Seat.Player3),
+            active = game.active,
+            dealer = game.dealer,
+            out = Seat.Player3 in game.outPlayers,
+            speech = game.speechBubbles[Seat.Player3],
+            position = "left:75%; top:22%;",
+        )
+        ToiletSpot(game.discardPile.size)
+        TrumpCard(game.trump)
+        UserStatus(game)
+        TrickCards(game.trick, game.phase == GamePhase.Collecting, game.leader)
+        UserHand(game, onUserCardClick)
+        RoundControls(game, onNewRoundClick, onUserBid, onUserJoin, onUserExchangeConfirm)
+    }
+}
+
+@Composable
+private fun TableSpot(position: String, content: @Composable () -> Unit) {
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                $position
+                transform:translate(-50%, -50%);
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                z-index:2;
+            """.trimIndent()
+        )
+    }) {
+        content()
+    }
+}
+
+@Composable
+private fun PlayerArea(
+    seat: Seat,
+    cardCount: Int,
+    score: Int,
+    active: Seat,
+    dealer: Seat,
+    out: Boolean,
+    speech: String?,
+    position: String,
+) {
+    TableSpot(position) {
+        Div({
+            attr(
+                "style",
+                """
+                    position:relative;
+                    display:flex;
+                    flex-direction:column;
+                    align-items:center;
+                    gap:10px;
+                    width:168px;
+                    opacity:${if (out) ".48" else "1"};
+                """.trimIndent()
+            )
+        }) {
+            if (speech != null) {
+                SpeechBubble(speech)
+            }
+            ComputerPlayerIcon(seat.label, score, active == seat, dealer == seat, out)
+            Div({
+                attr(
+                    "style",
+                    """
+                        display:flex;
+                        justify-content:center;
+                        gap:4px;
+                        width:100%;
+                        min-height:48px;
+                    """.trimIndent()
+                )
+            }) {
+                repeat(cardCount) {
+                    FaceDownCard(width = 34, height = 48)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SpeechBubble(text: String) {
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                top:-38px;
+                left:50%;
+                transform:translateX(-50%);
+                z-index:5;
+                max-width:132px;
+                padding:7px 10px;
+                border-radius:8px;
+                color:#1f1a14;
+                background:#fff8eb;
+                border:1px solid rgba(40,31,22,.16);
+                box-shadow:0 10px 20px rgba(0,0,0,.18);
+                font-size:13px;
+                line-height:1.1;
+                font-weight:800;
+                text-align:center;
+                white-space:nowrap;
+            """.trimIndent()
+        )
+    }) {
+        Text(text)
+    }
+}
+
+@Composable
+private fun ComputerPlayerIcon(name: String, score: Int, active: Boolean, dealer: Boolean, out: Boolean) {
+    Div({
+        attr(
+            "style",
+            """
+                position:relative;
+                width:76px;
+                height:76px;
+                border-radius:50%;
+                display:flex;
+                flex-direction:column;
+                align-items:center;
+                justify-content:center;
+                padding:9px;
+                box-sizing:border-box;
+                text-align:center;
+                font-size:14px;
+                line-height:1.12;
+                font-weight:780;
+                color:#f9f2e8;
+                background:${if (out) "linear-gradient(145deg, #687077, #343b42)" else "linear-gradient(145deg, #394355, #161d29)"};
+                border:3px solid ${if (active) "#f6d55c" else "rgba(255,255,255,.42)"};
+                box-shadow:0 12px 24px rgba(0,0,0,.24);
+            """.trimIndent()
+        )
+    }) {
+        if (dealer) DealerBadge()
+        Text(name)
+        Div({ attr("style", "font-size:12px;opacity:.82;margin-top:3px;") }) {
+            Text(if (out) "out" else "$score tricks")
+        }
+    }
+}
+
+@Composable
+private fun DealerBadge() {
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                right:-6px;
+                top:-6px;
+                width:24px;
+                height:24px;
+                border-radius:50%;
+                display:flex;
+                align-items:center;
+                justify-content:center;
+                color:#1b2638;
+                background:#f6d55c;
+                border:2px solid #fff8eb;
+                font-size:13px;
+                font-weight:900;
+                box-shadow:0 5px 10px rgba(0,0,0,.2);
+            """.trimIndent()
+        )
+    }) {
+        Text("D")
+    }
+}
+
+@Composable
+private fun DeckIcon(remainingCards: Int, visible: Boolean) {
+    Div({
+        attr(
+            "style",
+            """
+                position:relative;
+                width:66px;
+                height:92px;
+                opacity:${if (visible && remainingCards > 0) "1" else ".2"};
+            """.trimIndent()
+        )
+        attr("title", "$remainingCards cards left")
+    }) {
+        repeat(3) { index ->
+            Div({
+                attr(
+                    "style",
+                    """
+                        position:absolute;
+                        left:${index * 5}px;
+                        top:${index * 4}px;
+                    """.trimIndent()
+                )
+            }) {
+                FaceDownCard(width = 52, height = 72)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FaceDownCard(width: Int, height: Int) {
+    Div({
+        attr(
+            "style",
+            """
+                width:${width}px;
+                height:${height}px;
+                flex:0 0 auto;
+                border-radius:6px;
+                border:1px solid rgba(20,17,14,.35);
+                background:
+                    linear-gradient(135deg, transparent 0 44%, rgba(255,255,255,.2) 45% 55%, transparent 56% 100%),
+                    repeating-linear-gradient(45deg, #842a30 0 7px, #a93b43 7px 14px);
+                box-shadow:0 7px 13px rgba(0,0,0,.2), inset 0 0 0 4px #f8ecd6, inset 0 0 0 6px #842a30;
+                animation:deal-pop .14s ease-out;
+            """.trimIndent()
+        )
+    })
+}
+
+@Composable
+private fun ToiletSpot(discardCount: Int) {
+    TableSpot("left:91%; top:43%;") {
+        Div({
+            attr(
+                "style",
+                """
+                    display:flex;
+                    flex-direction:column;
+                    align-items:center;
+                    gap:5px;
+                    color:#fff8eb;
+                    font-size:12px;
+                    font-weight:800;
+                    text-shadow:0 1px 2px rgba(0,0,0,.3);
+                """.trimIndent()
+            )
+        }) {
+            Div({
+                attr(
+                    "style",
+                    """
+                        width:74px;
+                        height:74px;
+                        border-radius:50%;
+                        display:flex;
+                        align-items:center;
+                        justify-content:center;
+                        background:#f8fffb;
+                        border:3px solid #d9f2e9;
+                        box-shadow:0 12px 24px rgba(0,0,0,.2);
+                    """.trimIndent()
+                )
+            }) {
+                Img(src = "/elements/toilet-bowl-svgrepo-com.svg", attrs = {
+                    attr("alt", "Toilet")
+                    attr("style", "display:block;width:48px;height:48px;object-fit:contain;")
+                })
+            }
+            Text("$discardCount cards")
+        }
+    }
+}
+
+@Composable
+private fun TrumpCard(trump: SwissCard?) {
+    if (trump == null) return
+
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                left:18%;
+                top:57%;
+                transform:translate(-50%, -50%);
+                z-index:2;
+                display:flex;
+                flex-direction:column;
+                align-items:center;
+                gap:6px;
+                color:#fff8eb;
+                font-size:13px;
+                font-weight:800;
+                text-shadow:0 1px 2px rgba(0,0,0,.3);
+            """.trimIndent()
+        )
+    }) {
+        Text("Trump")
+        CardView(trump, width = 62, height = 87, clickable = false)
+    }
+}
+
+@Composable
+private fun UserStatus(game: GameState) {
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                left:50%;
+                bottom:168px;
+                transform:translateX(-50%);
+                z-index:5;
+                display:flex;
+                align-items:center;
+                gap:10px;
+            """.trimIndent()
+        )
+    }) {
+        Div({
+            attr(
+                "style",
+                """
+                    position:relative;
+                    padding:7px 13px;
+                    border-radius:999px;
+                    color:#fff8eb;
+                    background:${if (Seat.User in game.outPlayers) "#687077" else "#1b2638"};
+                    font-size:13px;
+                    font-weight:800;
+                    box-shadow:0 10px 20px rgba(0,0,0,.18);
+                """.trimIndent()
+            )
+        }) {
+            if (game.dealer == Seat.User) DealerBadge()
+            Text("${Seat.User.label}: ${if (Seat.User in game.outPlayers) "out" else "${game.score(Seat.User)} tricks"}")
+        }
+        game.speechBubbles[Seat.User]?.let { SpeechBubbleInline(it) }
+    }
+}
+
+@Composable
+private fun SpeechBubbleInline(text: String) {
+    Div({
+        attr(
+            "style",
+            """
+                padding:7px 10px;
+                border-radius:8px;
+                color:#1f1a14;
+                background:#fff8eb;
+                border:1px solid rgba(40,31,22,.16);
+                box-shadow:0 10px 20px rgba(0,0,0,.16);
+                font-size:13px;
+                line-height:1.1;
+                font-weight:800;
+                white-space:nowrap;
+            """.trimIndent()
+        )
+    }) {
+        Text(text)
+    }
+}
+
+@Composable
+private fun RoundControls(
+    game: GameState,
+    onNewRoundClick: () -> Unit,
+    onUserBid: (Boolean) -> Unit,
+    onUserJoin: (Boolean) -> Unit,
+    onUserExchangeConfirm: () -> Unit,
+) {
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                left:50%;
+                top:53%;
+                transform:translate(-50%, -50%);
+                z-index:6;
+                display:flex;
+                flex-direction:column;
+                align-items:center;
+                gap:10px;
+                min-width:250px;
+            """.trimIndent()
+        )
+    }) {
+        Div({
+            attr(
+                "style",
+                """
+                    max-width:360px;
+                    padding:10px 14px;
+                    border-radius:8px;
+                    color:#fff8eb;
+                    background:rgba(27,38,56,.94);
+                    box-shadow:0 12px 26px rgba(0,0,0,.2);
+                    font-size:14px;
+                    line-height:1.25;
+                    font-weight:800;
+                    text-align:center;
+                """.trimIndent()
+            )
+        }) {
+            Text(game.roundMessage)
+        }
+
+        when {
+            game.phase == GamePhase.Idle || game.phase == GamePhase.Finished -> {
+                PrimaryButton(if (game.phase == GamePhase.Idle) "Start new round" else "Next round", onNewRoundClick)
+            }
+
+            game.phase == GamePhase.CallingChratze && game.active == Seat.User -> {
+                Div({ attr("style", "display:flex;gap:10px;") }) {
+                    PrimaryButton("chratze") { onUserBid(true) }
+                    SecondaryButton("lose") { onUserBid(false) }
+                }
+            }
+
+            game.phase == GamePhase.CallingAlong && game.active == Seat.User -> {
+                Div({ attr("style", "display:flex;gap:10px;") }) {
+                    PrimaryButton("chume mit") { onUserJoin(true) }
+                    SecondaryButton("ich bin weg") { onUserJoin(false) }
+                }
+            }
+
+            game.phase == GamePhase.Exchanging && game.active == Seat.User -> {
+                PrimaryButton("Exchange ${game.selectedExchangeIds.size}") { onUserExchangeConfirm() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrimaryButton(label: String, onClick: () -> Unit) {
+    Button(attrs = {
+        onClick { onClick() }
+        attr(
+            "style",
+            """
+                border:0;
+                border-radius:8px;
+                padding:12px 18px;
+                font-size:15px;
+                font-weight:850;
+                color:#fff8eb;
+                background:#1b2638;
+                box-shadow:0 12px 24px rgba(0,0,0,.24);
+                cursor:pointer;
+            """.trimIndent()
+        )
+    }) {
+        Text(label)
+    }
+}
+
+@Composable
+private fun SecondaryButton(label: String, onClick: () -> Unit) {
+    Button(attrs = {
+        onClick { onClick() }
+        attr(
+            "style",
+            """
+                border:0;
+                border-radius:8px;
+                padding:12px 18px;
+                font-size:15px;
+                font-weight:850;
+                color:#1b2638;
+                background:#fff8eb;
+                box-shadow:0 12px 24px rgba(0,0,0,.18);
+                cursor:pointer;
+            """.trimIndent()
+        )
+    }) {
+        Text(label)
+    }
+}
+
+@Composable
+private fun TrickCards(trick: List<PlayedCard>, collecting: Boolean, winner: Seat) {
+    trick.forEachIndexed { index, playedCard ->
+        val target = trickPosition(playedCard.seat, index)
+        val collectTarget = collectPosition(winner)
+        Div({
+            attr(
+                "style",
+                """
+                    position:absolute;
+                    left:${if (collecting) collectTarget.first else target.first};
+                    top:${if (collecting) collectTarget.second else target.second};
+                    transform:${if (collecting) "translate(-50%, -50%) scale(.35)" else "translate(-50%, -50%)"};
+                    opacity:${if (collecting) "0" else "1"};
+                    transition:left .65s ease, top .65s ease, transform .65s ease, opacity .65s ease;
+                    animation:${if (playedCard.seat == Seat.User) "user-card-to-center .45s ease-out" else "player-card-to-center .4s ease-out"};
+                    z-index:4;
+                """.trimIndent()
+            )
+        }) {
+            CardView(playedCard.card, width = 92, height = 129, clickable = false)
+        }
+    }
+}
+
+private fun trickPosition(seat: Seat, index: Int): Pair<String, String> = when (seat) {
+    Seat.User -> "50%" to "60%"
+    Seat.Player1 -> "43%" to "45%"
+    Seat.Player2 -> "50%" to "39%"
+    Seat.Player3 -> "57%" to "45%"
+}
+
+private fun collectPosition(seat: Seat): Pair<String, String> = when (seat) {
+    Seat.User -> "50%" to "91%"
+    Seat.Player1 -> "25%" to "22%"
+    Seat.Player2 -> "50%" to "12%"
+    Seat.Player3 -> "75%" to "22%"
+}
+
+@Composable
+private fun UserHand(game: GameState, onUserCardClick: (SwissCard) -> Unit) {
+    val legalIds = if (game.phase == GamePhase.Playing && game.active == Seat.User && game.trump != null) {
+        legalCards(game.hand(Seat.User), game.trick, game.trump.suit).map { it.id }.toSet()
+    } else {
+        emptySet()
+    }
+    val exchangeSelectable = game.phase == GamePhase.Exchanging && game.active == Seat.User
+
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                left:50%;
+                bottom:4px;
+                transform:translateX(-50%);
+                display:flex;
+                align-items:flex-end;
+                justify-content:center;
+                gap:14px;
+                width:min(92%, 600px);
+                min-height:146px;
+                z-index:3;
+            """.trimIndent()
+        )
+    }) {
+        game.hand(Seat.User).forEach { card ->
+            val legal = legalIds.contains(card.id)
+            val selected = card.id in game.selectedExchangeIds
+            val clickable = legal || exchangeSelectable
+            Div({
+                if (clickable) {
+                    onClick { onUserCardClick(card) }
+                }
+                attr(
+                    "style",
+                    """
+                        cursor:${if (clickable) "pointer" else "default"};
+                        opacity:${if (game.phase == GamePhase.Playing && game.active == Seat.User && !legal) ".45" else "1"};
+                        transform:${if (selected) "translateY(-18px)" else "translateY(0)"};
+                        transition:transform .16s ease, opacity .16s ease;
+                        animation:deal-pop .14s ease-out;
+                        outline:${if (selected) "4px solid #f6d55c" else "0"};
+                        border-radius:9px;
+                    """.trimIndent()
+                )
+            }) {
+                CardView(card, width = 104, height = 146, clickable = clickable)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CardView(card: SwissCard, width: Int, height: Int, clickable: Boolean) {
+    Div({
+        attr(
+            "style",
+            """
+                position:relative;
+                width:${width}px;
+                height:${height}px;
+                flex:0 0 auto;
+                overflow:hidden;
+                border-radius:8px;
+                border:1px solid rgba(36,28,21,.16);
+                background:#fffaf0;
+                box-shadow:0 16px 30px rgba(28,22,15,.18), inset 0 0 0 7px #fffdf7, inset 0 0 0 9px rgba(38,31,22,.10);
+                color:${card.suit.ink};
+                transform:${if (clickable) "translateY(0)" else "none"};
+            """.trimIndent()
+        )
+    }) {
+        Div({
+            attr(
+                "style",
+                """
+                    position:absolute;
+                    top:${if (height > 140) "14px" else "9px"};
+                    left:0;
+                    right:0;
+                    text-align:center;
+                    font-size:${if (height > 140) "28px" else "21px"};
+                    line-height:1;
+                    font-weight:820;
+                    letter-spacing:0;
+                """.trimIndent()
+            )
+        }) {
+            Text(card.rankLabel())
+        }
+        Div({
+            attr(
+                "style",
+                """
+                    position:absolute;
+                    inset:${if (height > 140) "44px 10px 14px" else "33px 8px 10px"};
+                    display:flex;
+                    align-items:center;
+                    justify-content:center;
+                """.trimIndent()
+            )
+        }) {
+            Img(src = card.suit.assetPath, attrs = {
+                attr("alt", card.suit.name)
+                attr(
+                    "style",
+                    """
+                        display:block;
+                        width:100%;
+                        height:100%;
+                        object-fit:contain;
+                    """.trimIndent()
+                )
+            })
+        }
+    }
+}
+
+private fun SwissCard.rankLabel() = when (rank) {
+    "Under" -> "U"
+    "Ober" -> "O"
+    "Koenig" -> "K"
+    "Ass" -> "A"
+    else -> rank
 }
