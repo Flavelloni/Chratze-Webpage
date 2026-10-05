@@ -19,7 +19,6 @@ import org.jetbrains.compose.web.dom.Button
 import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.H1
 import org.jetbrains.compose.web.dom.Img
-import org.jetbrains.compose.web.dom.Style
 import org.jetbrains.compose.web.dom.Text
 
 private enum class SwissSuit(
@@ -46,7 +45,9 @@ private enum class GamePhase {
     CallingAlong,
     Exchanging,
     Playing,
+    TrickReview,
     Collecting,
+    Settlement,
     Finished,
 }
 
@@ -55,6 +56,21 @@ private data class SwissCard(val rank: String, val suit: SwissSuit) {
 }
 
 private data class PlayedCard(val card: SwissCard, val seat: Seat)
+
+private data class DealAnimation(
+    val card: SwissCard,
+    val target: Seat,
+    val arrived: Boolean,
+)
+
+private data class CardFlight(
+    val card: SwissCard,
+    val from: Pair<String, String>,
+    val to: Pair<String, String>,
+    val arrived: Boolean,
+    val faceUp: Boolean,
+    val offset: Int,
+)
 
 private data class GameState(
     val phase: GamePhase = GamePhase.Idle,
@@ -70,15 +86,23 @@ private data class GameState(
     val activePlayers: Set<Seat> = seats.toSet(),
     val outPlayers: Set<Seat> = emptySet(),
     val scores: Map<Seat, Int> = emptyScores(),
+    val bankrolls: Map<Seat, Int> = emptyMoney(),
+    val pot: Int = 0,
+    val moneyEvents: Map<Seat, Int> = emptyMap(),
     val speechBubbles: Map<Seat, String> = emptyMap(),
     val selectedExchangeIds: Set<String> = emptySet(),
+    val dealAnimation: DealAnimation? = null,
+    val cardFlights: List<CardFlight> = emptyList(),
+    val trumpAttempts: Int = 0,
+    val pendingTrickWinner: Seat? = null,
     val roundMessage: String = "Start a new round.",
 )
 
 private val seats = listOf(Seat.User, Seat.Player1, Seat.Player2, Seat.Player3)
-private val counterClockwiseSeats = listOf(Seat.User, Seat.Player3, Seat.Player2, Seat.Player1)
+private val counterClockwiseSeats = listOf(Seat.User, Seat.Player1, Seat.Player2, Seat.Player3)
 private val ranks = listOf("6", "7", "8", "9", "10", "Under", "Ober", "Koenig", "Ass")
 private val deck = SwissSuit.entries.flatMap { suit -> ranks.map { rank -> SwissCard(rank, suit) } }
+private const val CHF = 100
 
 @InitRoute
 fun initHomePage(ctx: InitRouteContext) {
@@ -91,25 +115,6 @@ fun initHomePage(ctx: InitRouteContext) {
 fun HomePage() {
     var game by remember { mutableStateOf(GameState()) }
     val scope = rememberCoroutineScope()
-
-    Style {
-        Text(
-            """
-            @keyframes deal-pop {
-              from { transform: translateY(-18px) scale(.82); opacity: 0; }
-              to { transform: translateY(0) scale(1); opacity: 1; }
-            }
-            @keyframes user-card-to-center {
-              from { transform: translate(-50%, 185px) scale(1.15); opacity: .75; }
-              to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-            }
-            @keyframes player-card-to-center {
-              from { transform: translate(-50%, -145px) scale(.72); opacity: .7; }
-              to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-            }
-            """.trimIndent()
-        )
-    }
 
     Div({
         attr(
@@ -167,6 +172,14 @@ fun HomePage() {
                     }
                 }
             },
+            onTableClick = {
+                if (game.phase == GamePhase.TrickReview) {
+                    scope.launch {
+                        game = collectReviewedTrick(game) { next -> game = next }
+                        game = advanceComputers(game) { next -> game = next }
+                    }
+                }
+            },
         )
     }
 }
@@ -175,10 +188,20 @@ private fun emptyHands(): Map<Seat, List<SwissCard>> = seats.associateWith { emp
 
 private fun emptyScores(): Map<Seat, Int> = seats.associateWith { 0 }
 
+private fun emptyMoney(): Map<Seat, Int> = seats.associateWith { 0 }
+
 private suspend fun dealNewRound(previous: GameState, setGame: (GameState) -> Unit): GameState {
     val shuffled = deck.shuffled(Random.Default)
     val firstToAct = nextCounterClockwise(previous.dealer)
     val dealOrder = counterClockwiseOrderFrom(firstToAct, seats.toSet())
+    val needsAnte = previous.pot == 0
+    val startingBankrolls = if (needsAnte) {
+        previous.bankrolls.mapValues { it.value - CHF }
+    } else {
+        previous.bankrolls
+    }
+    val startingPot = if (needsAnte) seats.size * CHF else previous.pot
+    val anteEvents = if (needsAnte) seats.associateWith { -CHF } else emptyMap()
     var current = GameState(
         phase = GamePhase.Dealing,
         hands = emptyHands(),
@@ -193,9 +216,20 @@ private suspend fun dealNewRound(previous: GameState, setGame: (GameState) -> Un
         activePlayers = seats.toSet(),
         outPlayers = emptySet(),
         scores = emptyScores(),
+        bankrolls = startingBankrolls,
+        pot = startingPot,
+        moneyEvents = anteEvents,
         speechBubbles = emptyMap(),
         selectedExchangeIds = emptySet(),
-        roundMessage = "${previous.dealer.label} deals.",
+        dealAnimation = null,
+        cardFlights = emptyList(),
+        trumpAttempts = 1,
+        pendingTrickWinner = null,
+        roundMessage = if (needsAnte) {
+            "Everyone pays CHF 1 into the pot. ${previous.dealer.label} deals."
+        } else {
+            "The carried pot is ${startingPot.chf()}. ${previous.dealer.label} deals."
+        },
     )
     setGame(current)
     delay(180)
@@ -203,12 +237,21 @@ private suspend fun dealNewRound(previous: GameState, setGame: (GameState) -> Un
     repeat(4) {
         dealOrder.forEach { seat ->
             val card = current.drawPile.first()
+            current = current.copy(dealAnimation = DealAnimation(card, seat, arrived = false))
+            setGame(current)
+            delay(30)
+
+            current = current.copy(dealAnimation = current.dealAnimation?.copy(arrived = true))
+            setGame(current)
+            delay(190)
+
             current = current.copy(
                 hands = current.hands.plus(seat to current.hand(seat) + card),
                 drawPile = current.drawPile.drop(1),
+                dealAnimation = null,
             )
             setGame(current)
-            delay(90)
+            delay(35)
         }
     }
 
@@ -219,6 +262,7 @@ private suspend fun dealNewRound(previous: GameState, setGame: (GameState) -> Un
         phase = GamePhase.CallingChratze,
         active = firstToAct,
         leader = firstToAct,
+        dealAnimation = null,
         roundMessage = "${firstToAct.label} starts: chratze or lose.",
     )
     setGame(current)
@@ -319,17 +363,68 @@ private suspend fun applyBid(
 
     if (next == firstBidder) {
         delay(520)
-        val finished = current.copy(
-            phase = GamePhase.Finished,
-            dealer = nextCounterClockwise(current.dealer),
-            active = nextCounterClockwise(current.dealer),
-            activePlayers = emptySet(),
-            roundMessage = "Nobody said chratze. The dealer button moves.",
-        )
-        setGame(finished)
-        return finished
+        return handleAllPassed(current, setGame)
     }
 
+    return current
+}
+
+private suspend fun handleAllPassed(
+    state: GameState,
+    setGame: (GameState) -> Unit,
+): GameState {
+    if (state.trumpAttempts < 3 && state.drawPile.isNotEmpty()) {
+        val nextTrump = state.drawPile.first()
+        val firstBidder = nextCounterClockwise(state.dealer)
+        val current = state.copy(
+            trump = nextTrump,
+            drawPile = state.drawPile.drop(1),
+            discardPile = state.discardPile + listOfNotNull(state.trump),
+            active = firstBidder,
+            leader = firstBidder,
+            speechBubbles = emptyMap(),
+            trumpAttempts = state.trumpAttempts + 1,
+            roundMessage = "Everyone said lose. New trump ${nextTrump.rankLabel()} ${nextTrump.suit.name}; call again.",
+        )
+        setGame(current)
+        delay(300)
+        return current
+    }
+
+    val allHandCards = seats.flatMap { state.hand(it) }
+    var current = state.copy(
+        hands = emptyHands(),
+        activePlayers = emptySet(),
+        outPlayers = seats.toSet(),
+        speechBubbles = emptyMap(),
+        selectedExchangeIds = emptySet(),
+        cardFlights = seats.flatMap { seat ->
+            state.hand(seat).toToiletFlights(fromSeat = seat, faceUp = seat == Seat.User)
+        },
+        roundMessage = "Everyone passed three trumps. Cards go to the toilet and everyone adds CHF 1.",
+    )
+    setGame(current)
+    delay(30)
+
+    current = current.copy(cardFlights = current.cardFlights.map { it.copy(arrived = true) })
+    setGame(current)
+    delay(280)
+
+    val anteEvents = seats.associateWith { -CHF }
+    current = current.copy(
+        phase = GamePhase.Finished,
+        dealer = nextCounterClockwise(current.dealer),
+        active = nextCounterClockwise(current.dealer),
+        bankrolls = current.bankrolls.applyMoneyEvents(anteEvents),
+        pot = current.pot + seats.size * CHF,
+        moneyEvents = anteEvents,
+        discardPile = current.discardPile + allHandCards + listOfNotNull(current.trump),
+        trump = null,
+        cardFlights = emptyList(),
+        trumpAttempts = 0,
+        roundMessage = "Three trumps passed. Dealer button moves; next round plays for ${ (current.pot + seats.size * CHF).chf() }.",
+    )
+    setGame(current)
     return current
 }
 
@@ -352,18 +447,19 @@ private suspend fun applyJoin(
             roundMessage = "${seat.label} calls.",
         )
     } else {
-        foldPlayer(
+        animateFoldToToilet(
             state.copy(
                 speechBubbles = state.speechBubbles.plus(seat to "ich bin weg"),
                 roundMessage = "${seat.label} folds.",
             ),
             seat,
+            setGame,
         )
     }
 
     val next = nextCounterClockwise(seat)
     val current = if (next == withDecision.chratzer) {
-        withDecision.copy(active = withDecision.chratzer ?: seat)
+        withDecision.copy(active = next)
     } else {
         withDecision.copy(active = next)
     }
@@ -377,14 +473,41 @@ private suspend fun applyJoin(
     }
 }
 
-private fun foldPlayer(state: GameState, seat: Seat): GameState =
-    state.copy(
+private suspend fun animateFoldToToilet(
+    state: GameState,
+    seat: Seat,
+    setGame: (GameState) -> Unit,
+): GameState {
+    val foldingCards = state.hand(seat)
+    if (foldingCards.isEmpty()) {
+        return state.copy(
+            activePlayers = state.activePlayers - seat,
+            outPlayers = state.outPlayers + seat,
+            selectedExchangeIds = if (seat == Seat.User) emptySet() else state.selectedExchangeIds,
+        )
+    }
+
+    var current = state.copy(
         hands = state.hands.plus(seat to emptyList()),
-        discardPile = state.discardPile + state.hand(seat),
         activePlayers = state.activePlayers - seat,
         outPlayers = state.outPlayers + seat,
         selectedExchangeIds = if (seat == Seat.User) emptySet() else state.selectedExchangeIds,
+        cardFlights = foldingCards.toToiletFlights(fromSeat = seat, faceUp = seat == Seat.User),
     )
+    setGame(current)
+    delay(30)
+
+    current = current.copy(cardFlights = current.cardFlights.map { it.copy(arrived = true) })
+    setGame(current)
+    delay(260)
+
+    current = current.copy(
+        discardPile = current.discardPile + foldingCards,
+        cardFlights = emptyList(),
+    )
+    setGame(current)
+    return current
+}
 
 private suspend fun GameState.startExchange(setGame: (GameState) -> Unit): GameState {
     val starter = chratzer ?: active
@@ -413,17 +536,50 @@ private suspend fun exchangeCards(
     val starter = state.chratzer ?: seat
     val spoken = if (selected.isEmpty()) "keini" else "${selected.size} weg"
 
-    val exchanged = state.copy(
-        hands = state.hands.plus(seat to kept + drawn),
-        drawPile = nextDrawPile,
-        discardPile = state.discardPile + selected,
+    var exchanged = state.copy(
         active = nextActive,
         speechBubbles = state.speechBubbles.plus(seat to spoken),
         selectedExchangeIds = emptySet(),
         roundMessage = "${seat.label} exchanges ${selected.size}.",
     )
+
+    if (selected.isNotEmpty()) {
+        exchanged = exchanged.copy(
+            hands = exchanged.hands.plus(seat to kept),
+            cardFlights = selected.toToiletFlights(fromSeat = seat, faceUp = seat == Seat.User),
+        )
+        setGame(exchanged)
+        delay(30)
+
+        exchanged = exchanged.copy(cardFlights = exchanged.cardFlights.map { it.copy(arrived = true) })
+        setGame(exchanged)
+        delay(260)
+
+        exchanged = exchanged.copy(
+            discardPile = exchanged.discardPile + selected,
+            cardFlights = emptyList(),
+        )
+        setGame(exchanged)
+        delay(90)
+
+        exchanged = exchanged.copy(
+            cardFlights = drawn.fromDeckFlights(toSeat = seat, faceUp = seat == Seat.User),
+        )
+        setGame(exchanged)
+        delay(30)
+
+        exchanged = exchanged.copy(cardFlights = exchanged.cardFlights.map { it.copy(arrived = true) })
+        setGame(exchanged)
+        delay(260)
+    }
+
+    exchanged = exchanged.copy(
+        hands = exchanged.hands.plus(seat to kept + drawn),
+        drawPile = nextDrawPile,
+        cardFlights = emptyList(),
+    )
     setGame(exchanged)
-    delay(420)
+    delay(160)
 
     if (nextActive == starter) {
         val playing = exchanged.copy(
@@ -462,31 +618,112 @@ private suspend fun playTurn(
     if (current.trick.size == current.activePlayers.size) {
         val winner = trickWinner(current.trick, current.trump!!.suit)
         current = current.copy(
-            phase = GamePhase.Collecting,
+            phase = GamePhase.TrickReview,
             active = winner,
             leader = winner,
-            scores = current.scores.plus(winner to current.score(winner) + 1),
-            roundMessage = "${winner.label} wins the trick.",
-        )
-        setGame(current)
-        delay(720)
-
-        val finished = current.activePlayers.all { current.hand(it).isEmpty() }
-        current = current.copy(
-            phase = if (finished) GamePhase.Finished else GamePhase.Playing,
-            dealer = if (finished) nextCounterClockwise(current.dealer) else current.dealer,
-            trick = emptyList(),
-            active = winner,
-            leader = winner,
-            roundMessage = if (finished) {
-                "Round complete. The dealer button moves."
-            } else {
-                "${winner.label} leads the next trick."
-            },
+            pendingTrickWinner = winner,
+            roundMessage = "${winner.label} wins the trick. Click the table to collect it.",
         )
         setGame(current)
     }
 
+    return current
+}
+
+private suspend fun collectReviewedTrick(
+    state: GameState,
+    setGame: (GameState) -> Unit,
+): GameState {
+    val winner = state.pendingTrickWinner ?: return state
+    var current = state.copy(
+        phase = GamePhase.Collecting,
+        active = winner,
+        leader = winner,
+        scores = state.scores.plus(winner to state.score(winner) + 1),
+        pendingTrickWinner = null,
+        roundMessage = "${winner.label} collects the trick.",
+    )
+    setGame(current)
+    delay(620)
+
+    val finished = current.activePlayers.all { current.hand(it).isEmpty() }
+    current = current.copy(
+        trick = emptyList(),
+        active = winner,
+        leader = winner,
+    )
+
+    if (finished) {
+        return settleRound(current, setGame)
+    }
+
+    current = current.copy(
+        phase = GamePhase.Playing,
+        roundMessage = "${winner.label} leads the next trick.",
+    )
+    setGame(current)
+    return current
+}
+
+private fun settleRound(
+    state: GameState,
+    setGame: (GameState) -> Unit,
+): GameState {
+    val chratzer = state.chratzer ?: return state.copy(phase = GamePhase.Finished).also(setGame)
+    val currentPot = state.pot
+    val chratzerTricks = state.score(chratzer)
+    val callers = state.activePlayers - chratzer
+    val payoutEvents = mutableMapOf<Seat, Int>()
+
+    val chratzerShare = when {
+        chratzerTricks == 4 -> currentPot
+        chratzerTricks >= 2 -> ceilToNextTenRappen(ceilDiv(currentPot * 2, 3)).coerceAtMost(currentPot)
+        else -> 0
+    }
+    if (chratzerShare > 0) {
+        payoutEvents[chratzer] = chratzerShare
+    }
+
+    val callerShareTotal = currentPot - chratzerShare
+    val paidCallers = callers.filter { state.score(it) > 0 }
+    if (callerShareTotal > 0 && paidCallers.isNotEmpty()) {
+        distribute(callerShareTotal, paidCallers).forEach { (seat, amount) ->
+            payoutEvents[seat] = payoutEvents.getValueOrZero(seat) + amount
+        }
+    }
+
+    val loserPayments = mutableMapOf<Seat, Int>()
+    if (chratzerTricks < 2) {
+        loserPayments[chratzer] = -(currentPot * 2)
+    }
+    callers.filter { state.score(it) == 0 }.forEach { caller ->
+        loserPayments[caller] = loserPayments.getValueOrZero(caller) - currentPot
+    }
+
+    val anteEvents = if (loserPayments.isEmpty()) seats.associateWith { -CHF } else emptyMap()
+    val moneyEvents = mergeMoneyEvents(payoutEvents, loserPayments, anteEvents)
+    val nextPot = if (loserPayments.isEmpty()) {
+        seats.size * CHF
+    } else {
+        -loserPayments.values.sum()
+    }
+    val summary = settlementSummary(chratzer, chratzerTricks, payoutEvents, loserPayments, anteEvents, nextPot)
+    val current = state.copy(
+        phase = GamePhase.Settlement,
+        dealer = nextCounterClockwise(state.dealer),
+        active = nextCounterClockwise(state.dealer),
+        bankrolls = state.bankrolls.applyMoneyEvents(moneyEvents),
+        pot = nextPot,
+        moneyEvents = moneyEvents,
+        trump = null,
+        activePlayers = emptySet(),
+        outPlayers = emptySet(),
+        speechBubbles = emptyMap(),
+        selectedExchangeIds = emptySet(),
+        trumpAttempts = 0,
+        roundMessage = summary,
+    )
+    setGame(current)
     return current
 }
 
@@ -534,6 +771,68 @@ private fun trickWinner(trick: List<PlayedCard>, trumpSuit: SwissSuit): Seat {
 }
 
 private fun rankValue(rank: String): Int = ranks.indexOf(rank)
+
+private fun ceilDiv(value: Int, divisor: Int): Int = (value + divisor - 1) / divisor
+
+private fun ceilToNextTenRappen(value: Int): Int = ceilDiv(value, 10) * 10
+
+private fun distribute(total: Int, players: List<Seat>): Map<Seat, Int> {
+    if (players.isEmpty()) return emptyMap()
+    val base = total / players.size
+    var remainder = total % players.size
+    return players.associateWith {
+        val extra = if (remainder > 0) {
+            remainder -= 1
+            1
+        } else {
+            0
+        }
+        base + extra
+    }
+}
+
+private fun mergeMoneyEvents(vararg maps: Map<Seat, Int>): Map<Seat, Int> =
+    buildMap {
+        maps.forEach { events ->
+            events.forEach { (seat, amount) ->
+                put(seat, getValueOrZero(seat) + amount)
+            }
+        }
+    }.filterValues { it != 0 }
+
+private fun Map<Seat, Int>.applyMoneyEvents(events: Map<Seat, Int>): Map<Seat, Int> =
+    seats.associateWith { seat -> getValueOrZero(seat) + events.getValueOrZero(seat) }
+
+private fun Map<Seat, Int>.getValueOrZero(seat: Seat): Int = this[seat] ?: 0
+
+private fun Int.chf(): String {
+    val sign = if (this < 0) "-" else ""
+    val absValue = kotlin.math.abs(this)
+    val francs = absValue / 100
+    val rappen = absValue % 100
+    return "${sign}CHF $francs.${rappen.toString().padStart(2, '0')}"
+}
+
+private fun settlementSummary(
+    chratzer: Seat,
+    chratzerTricks: Int,
+    payouts: Map<Seat, Int>,
+    loserPayments: Map<Seat, Int>,
+    anteEvents: Map<Seat, Int>,
+    nextPot: Int,
+): String {
+    val result = if (chratzerTricks >= 2) {
+        "${chratzer.label} wins with $chratzerTricks tricks."
+    } else {
+        "${chratzer.label} loses with $chratzerTricks tricks."
+    }
+    val payoutText = payouts.entries.joinToString { "${it.key.label} +${it.value.chf()}" }
+    val lossText = loserPayments.entries.joinToString { "${it.key.label} ${it.value.chf()}" }
+    val anteText = if (anteEvents.isNotEmpty()) "No one loses; everyone antes CHF 1." else ""
+    return listOf(result, payoutText, lossText, anteText, "Next pot: ${nextPot.chf()}.")
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+}
 
 private fun nextCounterClockwise(seat: Seat): Seat =
     counterClockwiseSeats[(counterClockwiseSeats.indexOf(seat) + 1) % counterClockwiseSeats.size]
@@ -610,8 +909,14 @@ private fun GameTable(
     onUserJoin: (Boolean) -> Unit,
     onUserCardClick: (SwissCard) -> Unit,
     onUserExchangeConfirm: () -> Unit,
+    onTableClick: () -> Unit,
 ) {
     Div({
+        onClick {
+            if (game.phase == GamePhase.TrickReview) {
+                onTableClick()
+            }
+        }
         attr(
             "style",
             """
@@ -619,6 +924,7 @@ private fun GameTable(
                 width:min(100%, 980px);
                 height:720px;
                 margin:0 auto;
+                cursor:${if (game.phase == GamePhase.TrickReview) "pointer" else "default"};
             """.trimIndent()
         )
     }) {
@@ -644,10 +950,15 @@ private fun GameTable(
         })
 
         TableSpot("left:9%; top:43%;") { DeckIcon(game.drawPile.size, game.phase != GamePhase.Idle) }
+        PotArea(game.pot)
+        FlyingDealCard(game.dealAnimation)
+        FlyingCards(game.cardFlights)
         PlayerArea(
             seat = Seat.Player1,
             cardCount = game.hand(Seat.Player1).size,
             score = game.score(Seat.Player1),
+            bankroll = game.bankrolls.getValueOrZero(Seat.Player1),
+            moneyEvent = game.moneyEvents[Seat.Player1],
             active = game.active,
             dealer = game.dealer,
             out = Seat.Player1 in game.outPlayers,
@@ -658,6 +969,8 @@ private fun GameTable(
             seat = Seat.Player2,
             cardCount = game.hand(Seat.Player2).size,
             score = game.score(Seat.Player2),
+            bankroll = game.bankrolls.getValueOrZero(Seat.Player2),
+            moneyEvent = game.moneyEvents[Seat.Player2],
             active = game.active,
             dealer = game.dealer,
             out = Seat.Player2 in game.outPlayers,
@@ -668,6 +981,8 @@ private fun GameTable(
             seat = Seat.Player3,
             cardCount = game.hand(Seat.Player3).size,
             score = game.score(Seat.Player3),
+            bankroll = game.bankrolls.getValueOrZero(Seat.Player3),
+            moneyEvent = game.moneyEvents[Seat.Player3],
             active = game.active,
             dealer = game.dealer,
             out = Seat.Player3 in game.outPlayers,
@@ -682,6 +997,127 @@ private fun GameTable(
         RoundControls(game, onNewRoundClick, onUserBid, onUserJoin, onUserExchangeConfirm)
     }
 }
+
+@Composable
+private fun PotArea(pot: Int) {
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                left:50%;
+                top:36%;
+                transform:translate(-50%, -50%);
+                z-index:2;
+                min-width:118px;
+                padding:9px 14px;
+                border-radius:8px;
+                color:#1b2638;
+                background:#f6d55c;
+                border:2px solid #fff8eb;
+                box-shadow:0 12px 24px rgba(0,0,0,.22);
+                text-align:center;
+                font-size:14px;
+                font-weight:900;
+            """.trimIndent()
+        )
+    }) {
+        Div { Text("Pot") }
+        Div({ attr("style", "font-size:13px;font-weight:850;") }) { Text(pot.chf()) }
+    }
+}
+
+@Composable
+private fun FlyingCards(cardFlights: List<CardFlight>) {
+    cardFlights.forEach { flight ->
+        val position = if (flight.arrived) flight.to else flight.from
+        Div({
+            attr(
+                "style",
+                """
+                    position:absolute;
+                    left:${position.first};
+                    top:${position.second};
+                    transform:translate(-50%, -50%) translate(${flight.offset}px, ${flight.offset / 2}px) rotate(${if (flight.arrived) "-8deg" else "6deg"});
+                    transition:left .24s ease-in, top .24s ease-in, transform .24s ease-in, opacity .24s ease-in;
+                    opacity:${if (flight.arrived && flight.to == toiletPosition()) ".25" else "1"};
+                    z-index:8;
+                    pointer-events:none;
+                """.trimIndent()
+            )
+        }) {
+            if (flight.faceUp) {
+                CardView(flight.card, width = 72, height = 101, clickable = false)
+            } else {
+                FaceDownCard(width = 52, height = 72)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FlyingDealCard(dealAnimation: DealAnimation?) {
+    if (dealAnimation == null) return
+
+    val position = if (dealAnimation.arrived) dealTargetPosition(dealAnimation.target) else deckPosition()
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                left:${position.first};
+                top:${position.second};
+                transform:translate(-50%, -50%) rotate(${if (dealAnimation.arrived) "-4deg" else "8deg"});
+                transition:left .18s ease-out, top .18s ease-out, transform .18s ease-out;
+                z-index:7;
+                pointer-events:none;
+            """.trimIndent()
+        )
+    }) {
+        if (dealAnimation.target == Seat.User) {
+            CardView(dealAnimation.card, width = 72, height = 101, clickable = false)
+        } else {
+            FaceDownCard(width = 52, height = 72)
+        }
+    }
+}
+
+private fun deckPosition(): Pair<String, String> = "9%" to "43%"
+
+private fun toiletPosition(): Pair<String, String> = "91%" to "43%"
+
+private fun dealTargetPosition(seat: Seat): Pair<String, String> = when (seat) {
+    Seat.User -> "50%" to "82%"
+    Seat.Player1 -> "25%" to "27%"
+    Seat.Player2 -> "50%" to "17%"
+    Seat.Player3 -> "75%" to "27%"
+}
+
+private fun List<SwissCard>.toToiletFlights(fromSeat: Seat, faceUp: Boolean): List<CardFlight> =
+    mapIndexed { index, card ->
+        CardFlight(
+            card = card,
+            from = dealTargetPosition(fromSeat),
+            to = toiletPosition(),
+            arrived = false,
+            faceUp = faceUp,
+            offset = flightOffset(index),
+        )
+    }
+
+private fun List<SwissCard>.fromDeckFlights(toSeat: Seat, faceUp: Boolean): List<CardFlight> =
+    mapIndexed { index, card ->
+        CardFlight(
+            card = card,
+            from = deckPosition(),
+            to = dealTargetPosition(toSeat),
+            arrived = false,
+            faceUp = faceUp,
+            offset = flightOffset(index),
+        )
+    }
+
+private fun flightOffset(index: Int): Int = (index - 1) * 10
 
 @Composable
 private fun TableSpot(position: String, content: @Composable () -> Unit) {
@@ -708,6 +1144,8 @@ private fun PlayerArea(
     seat: Seat,
     cardCount: Int,
     score: Int,
+    bankroll: Int,
+    moneyEvent: Int?,
     active: Seat,
     dealer: Seat,
     out: Boolean,
@@ -732,7 +1170,7 @@ private fun PlayerArea(
             if (speech != null) {
                 SpeechBubble(speech)
             }
-            ComputerPlayerIcon(seat.label, score, active == seat, dealer == seat, out)
+            ComputerPlayerIcon(seat.label, score, bankroll, moneyEvent, active == seat, dealer == seat, out)
             Div({
                 attr(
                     "style",
@@ -784,14 +1222,22 @@ private fun SpeechBubble(text: String) {
 }
 
 @Composable
-private fun ComputerPlayerIcon(name: String, score: Int, active: Boolean, dealer: Boolean, out: Boolean) {
+private fun ComputerPlayerIcon(
+    name: String,
+    score: Int,
+    bankroll: Int,
+    moneyEvent: Int?,
+    active: Boolean,
+    dealer: Boolean,
+    out: Boolean,
+) {
     Div({
         attr(
             "style",
             """
                 position:relative;
                 width:76px;
-                height:76px;
+                height:86px;
                 border-radius:50%;
                 display:flex;
                 flex-direction:column;
@@ -815,6 +1261,38 @@ private fun ComputerPlayerIcon(name: String, score: Int, active: Boolean, dealer
         Div({ attr("style", "font-size:12px;opacity:.82;margin-top:3px;") }) {
             Text(if (out) "out" else "$score tricks")
         }
+        Div({ attr("style", "font-size:11px;opacity:.9;margin-top:1px;") }) {
+            Text(bankroll.chf())
+        }
+        if (moneyEvent != null) {
+            MoneyChange(moneyEvent)
+        }
+    }
+}
+
+@Composable
+private fun MoneyChange(amount: Int) {
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                left:50%;
+                bottom:-23px;
+                transform:translateX(-50%);
+                padding:3px 7px;
+                border-radius:999px;
+                color:${if (amount >= 0) "#103b24" else "#611b1b"};
+                background:${if (amount >= 0) "#dff8e9" else "#ffe0dc"};
+                border:1px solid rgba(28,22,15,.12);
+                box-shadow:0 6px 12px rgba(0,0,0,.14);
+                font-size:12px;
+                font-weight:900;
+                white-space:nowrap;
+            """.trimIndent()
+        )
+    }) {
+        Text("${if (amount >= 0) "+" else ""}${amount.chf()}")
     }
 }
 
@@ -892,7 +1370,6 @@ private fun FaceDownCard(width: Int, height: Int) {
                     linear-gradient(135deg, transparent 0 44%, rgba(255,255,255,.2) 45% 55%, transparent 56% 100%),
                     repeating-linear-gradient(45deg, #842a30 0 7px, #a93b43 7px 14px);
                 box-shadow:0 7px 13px rgba(0,0,0,.2), inset 0 0 0 4px #f8ecd6, inset 0 0 0 6px #842a30;
-                animation:deal-pop .14s ease-out;
             """.trimIndent()
         )
     })
@@ -1004,7 +1481,8 @@ private fun UserStatus(game: GameState) {
             )
         }) {
             if (game.dealer == Seat.User) DealerBadge()
-            Text("${Seat.User.label}: ${if (Seat.User in game.outPlayers) "out" else "${game.score(Seat.User)} tricks"}")
+            Text("${Seat.User.label}: ${if (Seat.User in game.outPlayers) "out" else "${game.score(Seat.User)} tricks"} | ${game.bankrolls.getValueOrZero(Seat.User).chf()}")
+            game.moneyEvents[Seat.User]?.let { MoneyChange(it) }
         }
         game.speechBubbles[Seat.User]?.let { SpeechBubbleInline(it) }
     }
@@ -1079,7 +1557,7 @@ private fun RoundControls(
         }
 
         when {
-            game.phase == GamePhase.Idle || game.phase == GamePhase.Finished -> {
+            game.phase == GamePhase.Idle || game.phase == GamePhase.Finished || game.phase == GamePhase.Settlement -> {
                 PrimaryButton(if (game.phase == GamePhase.Idle) "Start new round" else "Next round", onNewRoundClick)
             }
 
@@ -1165,7 +1643,6 @@ private fun TrickCards(trick: List<PlayedCard>, collecting: Boolean, winner: Sea
                     transform:${if (collecting) "translate(-50%, -50%) scale(.35)" else "translate(-50%, -50%)"};
                     opacity:${if (collecting) "0" else "1"};
                     transition:left .65s ease, top .65s ease, transform .65s ease, opacity .65s ease;
-                    animation:${if (playedCard.seat == Seat.User) "user-card-to-center .45s ease-out" else "player-card-to-center .4s ease-out"};
                     z-index:4;
                 """.trimIndent()
             )
@@ -1231,7 +1708,6 @@ private fun UserHand(game: GameState, onUserCardClick: (SwissCard) -> Unit) {
                         opacity:${if (game.phase == GamePhase.Playing && game.active == Seat.User && !legal) ".45" else "1"};
                         transform:${if (selected) "translateY(-18px)" else "translateY(0)"};
                         transition:transform .16s ease, opacity .16s ease;
-                        animation:deal-pop .14s ease-out;
                         outline:${if (selected) "4px solid #f6d55c" else "0"};
                         border-radius:9px;
                     """.trimIndent()
