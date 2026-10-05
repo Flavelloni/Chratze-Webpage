@@ -1,5 +1,6 @@
 site:
   title: "Chratze"
+  basePath: "chratze"
 
 server:
   files:

@@ -11,6 +11,7 @@ import com.varabyte.kobweb.core.data.add
 import com.varabyte.kobweb.core.init.InitRoute
 import com.varabyte.kobweb.core.init.InitRouteContext
 import com.varabyte.kobweb.core.layout.Layout
+import com.varabyte.kobweb.navigation.BasePath
 import io.github.flavelloni.chratze.components.layouts.PageLayoutData
 import kotlin.random.Random
 import kotlinx.coroutines.delay
@@ -1409,7 +1410,7 @@ private fun ToiletSpot(discardCount: Int) {
                     """.trimIndent()
                 )
             }) {
-                Img(src = "/elements/toilet-bowl-svgrepo-com.svg", attrs = {
+                Img(src = BasePath.prependTo("/elements/toilet-bowl-svgrepo-com.svg"), attrs = {
                     attr("alt", "Toilet")
                     attr("style", "display:block;width:48px;height:48px;object-fit:contain;")
                 })
@@ -1769,7 +1770,7 @@ private fun CardView(card: SwissCard, width: Int, height: Int, clickable: Boolea
                 """.trimIndent()
             )
         }) {
-            Img(src = card.suit.assetPath, attrs = {
+            Img(src = BasePath.prependTo(card.suit.assetPath), attrs = {
                 attr("alt", card.suit.name)
                 attr(
                     "style",

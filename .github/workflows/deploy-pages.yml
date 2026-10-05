@@ -1,0 +1,61 @@
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    env:
+      KOBWEB_CLI_VERSION: 0.9.23
+      KOBWEB_EXPORT_NUM_THREADS: 1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Download Kobweb
+        run: |
+          curl -L -o kobweb.zip "https://github.com/varabyte/kobweb-cli/releases/download/v${KOBWEB_CLI_VERSION}/kobweb-${KOBWEB_CLI_VERSION}.zip"
+          unzip kobweb.zip
+          chmod +x "kobweb-${KOBWEB_CLI_VERSION}/bin/kobweb"
+
+      - name: Export static site
+        run: |
+          cd site
+          "../kobweb-${KOBWEB_CLI_VERSION}/bin/kobweb" export --notty --layout static
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/.kobweb/site
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: export
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
