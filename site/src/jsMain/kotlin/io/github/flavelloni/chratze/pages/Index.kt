@@ -18,7 +18,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.web.dom.Button
 import org.jetbrains.compose.web.dom.Div
-import org.jetbrains.compose.web.dom.H1
 import org.jetbrains.compose.web.dom.Img
 import org.jetbrains.compose.web.dom.Text
 
@@ -114,6 +113,7 @@ fun initHomePage(ctx: InitRouteContext) {
 @Composable
 fun HomePage() {
     var game by remember { mutableStateOf(GameState()) }
+    var inspectedSeat by remember { mutableStateOf<Seat?>(null) }
     val scope = rememberCoroutineScope()
 
     Div({
@@ -122,15 +122,15 @@ fun HomePage() {
             """
                 display:flex;
                 flex-direction:column;
-                gap:24px;
+                gap:0;
                 width:100%;
-                padding:14px 0 42px;
+                padding:0 0 8px;
             """.trimIndent()
         )
     }) {
-        Header()
         GameTable(
             game = game,
+            inspectedSeat = inspectedSeat,
             onNewRoundClick = {
                 scope.launch {
                     game = dealNewRound(game) { next -> game = next }
@@ -172,6 +172,8 @@ fun HomePage() {
                     }
                 }
             },
+            onPlayerClick = { seat -> inspectedSeat = seat },
+            onClosePlayerInfo = { inspectedSeat = null },
             onTableClick = {
                 if (game.phase == GamePhase.TrickReview) {
                     scope.launch {
@@ -862,55 +864,16 @@ private fun GameState.hand(seat: Seat): List<SwissCard> = hands[seat].orEmpty()
 private fun GameState.score(seat: Seat): Int = scores[seat] ?: 0
 
 @Composable
-private fun Header() {
-    Div({
-        attr(
-            "style",
-            """
-                display:flex;
-                flex-direction:column;
-                gap:10px;
-                max-width:760px;
-            """.trimIndent()
-        )
-    }) {
-        H1({
-            attr(
-                "style",
-                """
-                    margin:0;
-                    font-size:42px;
-                    line-height:1.05;
-                    font-weight:800;
-                    color:#17130f;
-                """.trimIndent()
-            )
-        }) {
-            Text("Chratze table")
-        }
-        Div({
-            attr(
-                "style",
-                """
-                    color:#64594f;
-                    font-size:17px;
-                    max-width:650px;
-                """.trimIndent()
-            )
-        }) {
-            Text("Deal, call chratze or lose, decide who comes along, exchange up to three cards, then play the tricks.")
-        }
-    }
-}
-
-@Composable
 private fun GameTable(
     game: GameState,
+    inspectedSeat: Seat?,
     onNewRoundClick: () -> Unit,
     onUserBid: (Boolean) -> Unit,
     onUserJoin: (Boolean) -> Unit,
     onUserCardClick: (SwissCard) -> Unit,
     onUserExchangeConfirm: () -> Unit,
+    onPlayerClick: (Seat) -> Unit,
+    onClosePlayerInfo: () -> Unit,
     onTableClick: () -> Unit,
 ) {
     Div({
@@ -923,9 +886,9 @@ private fun GameTable(
             "style",
             """
                 position:relative;
-                width:min(100%, 1160px);
-                height:clamp(560px, 82vh, 780px);
-                margin:0 auto;
+                width:min(100vw, 1220px);
+                height:clamp(620px, 94vh, 860px);
+                margin:-8px auto 0;
                 cursor:${if (game.phase == GamePhase.TrickReview) "pointer" else "default"};
             """.trimIndent()
         )
@@ -937,8 +900,8 @@ private fun GameTable(
                     position:absolute;
                     left:50%;
                     top:49%;
-                    width:96%;
-                    height:82%;
+                    width:102%;
+                    height:90%;
                     transform:translate(-50%, -50%);
                     border-radius:50%;
                     background:
@@ -966,6 +929,7 @@ private fun GameTable(
             out = Seat.Player1 in game.outPlayers,
             speech = game.speechBubbles[Seat.Player1],
             position = "left:23%; top:19%;",
+            onPlayerClick = onPlayerClick,
         )
         PlayerArea(
             seat = Seat.Player2,
@@ -978,6 +942,7 @@ private fun GameTable(
             out = Seat.Player2 in game.outPlayers,
             speech = game.speechBubbles[Seat.Player2],
             position = "left:50%; top:10%;",
+            onPlayerClick = onPlayerClick,
         )
         PlayerArea(
             seat = Seat.Player3,
@@ -990,13 +955,15 @@ private fun GameTable(
             out = Seat.Player3 in game.outPlayers,
             speech = game.speechBubbles[Seat.Player3],
             position = "left:77%; top:19%;",
+            onPlayerClick = onPlayerClick,
         )
         TrumpCard(game.trump)
         UserStatus(game)
         TrickCards(game.trick, game.phase == GamePhase.Collecting, game.leader)
-        UserHand(game, onUserCardClick)
+        UserHand(game, onUserCardClick, onUserExchangeConfirm)
         RoundControls(game, onNewRoundClick, onUserBid, onUserJoin, onUserExchangeConfirm)
         SettlementModal(game, onNewRoundClick)
+        PlayerInfoPopup(game, inspectedSeat, onClosePlayerInfo)
     }
 }
 
@@ -1008,24 +975,23 @@ private fun PotArea(pot: Int) {
             """
                 position:absolute;
                 left:50%;
-                top:34%;
+                top:33%;
                 transform:translate(-50%, -50%);
                 z-index:2;
-                min-width:72px;
-                padding:4px 8px;
-                border-radius:999px;
+                min-width:54px;
+                padding:0;
                 color:#fff8eb;
-                background:rgba(27,38,56,.74);
-                border:1px solid rgba(255,248,235,.42);
-                box-shadow:0 8px 16px rgba(0,0,0,.18);
+                background:transparent;
+                border:0;
+                text-shadow:0 2px 4px rgba(0,0,0,.42);
                 text-align:center;
-                font-size:17px;
+                font-size:27px;
                 font-weight:900;
             """.trimIndent()
         )
     }) {
-        Div { Text("▰") }
-        Div({ attr("style", "font-size:11px;font-weight:850;line-height:1;") }) { Text(pot.chf()) }
+        Div { Text("💰") }
+        Div({ attr("style", "font-size:11px;font-weight:900;line-height:1;margin-top:-2px;") }) { Text(pot.chf()) }
     }
 }
 
@@ -1149,6 +1115,7 @@ private fun PlayerArea(
     out: Boolean,
     speech: String?,
     position: String,
+    onPlayerClick: (Seat) -> Unit,
 ) {
     TableSpot(position) {
         Div({
@@ -1168,7 +1135,7 @@ private fun PlayerArea(
             if (speech != null) {
                 SpeechBubble(speech)
             }
-            ComputerPlayerIcon(seat, score, bankroll, moneyEvent, active == seat, dealer == seat, out)
+            ComputerPlayerIcon(seat, score, bankroll, moneyEvent, active == seat, dealer == seat, out, onPlayerClick)
             Div({
                 attr(
                     "style",
@@ -1240,29 +1207,32 @@ private fun ComputerPlayerIcon(
     active: Boolean,
     dealer: Boolean,
     out: Boolean,
+    onPlayerClick: (Seat) -> Unit,
 ) {
     Div({
+        onClick { onPlayerClick(seat) }
         attr(
             "style",
             """
                 position:relative;
-                width:58px;
-                height:58px;
+                width:42px;
+                height:42px;
                 border-radius:50%;
                 display:flex;
                 flex-direction:column;
                 align-items:center;
                 justify-content:center;
-                padding:5px;
+                padding:0;
                 box-sizing:border-box;
                 text-align:center;
-                font-size:26px;
+                font-size:30px;
                 line-height:1.12;
                 font-weight:780;
                 color:#1b2638;
-                background:${if (out) "#d8dde2" else "#fff8eb"};
-                border:2px solid ${if (active) "#f6d55c" else "rgba(255,255,255,.62)"};
-                box-shadow:0 9px 18px rgba(0,0,0,.2);
+                background:transparent;
+                border:0;
+                filter:${if (active) "drop-shadow(0 0 8px #f6d55c)" else "drop-shadow(0 3px 5px rgba(0,0,0,.25))"};
+                cursor:pointer;
             """.trimIndent()
         )
     }) {
@@ -1274,22 +1244,21 @@ private fun ComputerPlayerIcon(
                 """
                     position:absolute;
                     left:50%;
-                    top:60px;
+                    top:38px;
                     transform:translateX(-50%);
-                    min-width:88px;
+                    display:flex;
+                    align-items:center;
+                    gap:2px;
                     color:#fff8eb;
-                    font-size:11px;
-                    line-height:1.15;
-                    font-weight:850;
+                    font-size:10px;
+                    line-height:1;
+                    font-weight:900;
                     text-shadow:0 1px 2px rgba(0,0,0,.45);
                     white-space:nowrap;
                 """.trimIndent()
             )
         }) {
-            Text("${seat.label} · ${if (out) "out" else "$score"} · ${bankroll.chf()}")
-        }
-        Div({ attr("style", "display:none;") }) {
-            Text(bankroll.chf())
+            Text("💰 ${bankroll.chf().removePrefix("CHF ")}")
         }
         if (moneyEvent != null) {
             MoneyChange(moneyEvent)
@@ -1538,8 +1507,8 @@ private fun RoundControls(
                 }
             }
 
-            game.phase == GamePhase.Exchanging && game.active == Seat.User -> {
-                PrimaryButton("Exchange ${game.selectedExchangeIds.size}") { onUserExchangeConfirm() }
+            game.phase == GamePhase.Exchanging && game.active == Seat.User && game.selectedExchangeIds.isEmpty() -> {
+                SecondaryButton("Keep all") { onUserExchangeConfirm() }
             }
 
             game.phase == GamePhase.TrickReview -> {
@@ -1574,11 +1543,13 @@ private fun SettlementModal(game: GameState, onNewRoundClick: () -> Unit) {
             """
                 position:absolute;
                 left:50%;
-                top:8%;
+                top:5%;
                 transform:translateX(-50%);
-                width:min(92vw, 520px);
+                width:min(92vw, 420px);
+                max-height:82vh;
+                overflow:auto;
                 z-index:10;
-                padding:16px;
+                padding:12px;
                 border-radius:8px;
                 color:#1f1a14;
                 background:#fffaf0;
@@ -1595,7 +1566,7 @@ private fun SettlementModal(game: GameState, onNewRoundClick: () -> Unit) {
                     align-items:center;
                     justify-content:space-between;
                     gap:12px;
-                    margin-bottom:12px;
+                    margin-bottom:10px;
                 """.trimIndent()
             )
         }) {
@@ -1614,9 +1585,9 @@ private fun SettlementModal(game: GameState, onNewRoundClick: () -> Unit) {
             attr(
                 "style",
                 """
-                    display:grid;
-                    grid-template-columns:repeat(2, minmax(0, 1fr));
-                    gap:8px;
+                    display:flex;
+                    flex-direction:column;
+                    gap:6px;
                 """.trimIndent()
             )
         }) {
@@ -1636,29 +1607,29 @@ private fun SettlementPlayerCard(game: GameState, seat: Seat) {
             """
                 display:flex;
                 align-items:center;
-                gap:8px;
+                gap:9px;
                 min-width:0;
-                padding:8px;
+                padding:7px 9px;
                 border-radius:8px;
                 background:${if (amount >= 0) "#f1fbf4" else "#fff1ee"};
                 border:1px solid ${if (amount >= 0) "#cdebd6" else "#ffd0c8"};
             """.trimIndent()
         )
     }) {
-        Div({ attr("style", "font-size:26px;line-height:1;") }) { Text(seat.avatar) }
+        Div({ attr("style", "font-size:25px;line-height:1;width:32px;text-align:center;") }) { Text(seat.avatar) }
         Div({ attr("style", "min-width:0;flex:1;") }) {
-            Div({ attr("style", "font-size:12px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;") }) {
+            Div({ attr("style", "font-size:13px;font-weight:900;white-space:nowrap;") }) {
                 Text(seat.label)
             }
-            Div({ attr("style", "font-size:11px;color:#655c53;line-height:1.2;") }) {
-                Text("${game.score(seat)} tricks · ${game.bankrolls.getValueOrZero(seat).chf()}")
+            Div({ attr("style", "font-size:11px;color:#655c53;line-height:1.15;white-space:nowrap;") }) {
+                Text("${game.score(seat)} tricks · total ${game.bankrolls.getValueOrZero(seat).chf()}")
             }
         }
         Div({
             attr(
                 "style",
                 """
-                    font-size:12px;
+                    font-size:13px;
                     font-weight:950;
                     color:${if (amount >= 0) "#126334" else "#8a2520"};
                     white-space:nowrap;
@@ -1666,6 +1637,78 @@ private fun SettlementPlayerCard(game: GameState, seat: Seat) {
             )
         }) {
             Text("${if (amount >= 0) "+" else ""}${amount.chf()}")
+        }
+    }
+}
+
+@Composable
+private fun PlayerInfoPopup(game: GameState, seat: Seat?, onClose: () -> Unit) {
+    if (seat == null) return
+
+    Div({
+        onClick { onClose() }
+        attr(
+            "style",
+            """
+                position:absolute;
+                inset:0;
+                z-index:11;
+            """.trimIndent()
+        )
+    }) {
+        Div({
+            onClick { it.stopPropagation() }
+            attr(
+                "style",
+                """
+                    position:absolute;
+                    left:50%;
+                    top:18%;
+                    transform:translateX(-50%);
+                    width:min(84vw, 260px);
+                    padding:12px;
+                    border-radius:8px;
+                    background:#fffaf0;
+                    border:1px solid rgba(36,28,21,.16);
+                    box-shadow:0 18px 40px rgba(0,0,0,.28);
+                    color:#1f1a14;
+                """.trimIndent()
+            )
+        }) {
+            Div({
+                attr(
+                    "style",
+                    """
+                        display:flex;
+                        align-items:center;
+                        gap:10px;
+                    """.trimIndent()
+                )
+            }) {
+                Div({ attr("style", "font-size:34px;line-height:1;") }) { Text(seat.avatar) }
+                Div({ attr("style", "flex:1;min-width:0;") }) {
+                    Div({ attr("style", "font-size:16px;font-weight:950;") }) { Text(seat.label) }
+                    Div({ attr("style", "font-size:12px;color:#6d6259;font-weight:750;") }) {
+                        Text("${game.score(seat)} tricks · ${game.bankrolls.getValueOrZero(seat).chf()}")
+                    }
+                }
+                Button(attrs = {
+                    onClick { onClose() }
+                    attr(
+                        "style",
+                        """
+                            border:0;
+                            background:transparent;
+                            color:#6d6259;
+                            font-size:20px;
+                            font-weight:900;
+                            cursor:pointer;
+                        """.trimIndent()
+                    )
+                }) {
+                    Text("×")
+                }
+            }
         }
     }
 }
@@ -1755,7 +1798,12 @@ private fun collectPosition(seat: Seat): Pair<String, String> = when (seat) {
 }
 
 @Composable
-private fun UserHand(game: GameState, onUserCardClick: (SwissCard) -> Unit) {
+private fun UserHand(
+    game: GameState,
+    onUserCardClick: (SwissCard) -> Unit,
+    onUserExchangeConfirm: () -> Unit,
+) {
+    var touchStartY by remember { mutableStateOf<Double?>(null) }
     val legalIds = if (game.phase == GamePhase.Playing && game.active == Seat.User && game.trump != null) {
         legalCards(game.hand(Seat.User), game.trick, game.trump.suit).map { it.id }.toSet()
     } else {
@@ -1789,13 +1837,29 @@ private fun UserHand(game: GameState, onUserCardClick: (SwissCard) -> Unit) {
                 if (clickable) {
                     onClick { onUserCardClick(card) }
                 }
+                if (exchangeSelectable && selected) {
+                    attr("draggable", "true")
+                    attr("title", "Swipe toward the table to exchange selected cards")
+                    onDragEnd { onUserExchangeConfirm() }
+                    onTouchStart { event ->
+                        touchStartY = firstTouchY(event.touches)
+                    }
+                    onTouchEnd { event ->
+                        val startY = touchStartY
+                        val endY = firstTouchY(event.changedTouches)
+                        touchStartY = null
+                        if (startY != null && endY != null && startY - endY > 34.0) {
+                            onUserExchangeConfirm()
+                        }
+                    }
+                }
                 attr(
                     "style",
                     """
                         cursor:${if (clickable) "pointer" else "default"};
                         margin-left:${if (index == 0) "0" else "clamp(-56px, calc((430px - 100vw) * -1), 14px)"};
                         opacity:${if (game.phase == GamePhase.Playing && game.active == Seat.User && !legal) ".45" else "1"};
-                        transform:${if (selected) "translateY(-18px)" else "translateY(0)"};
+                        transform:${if (selected) "translateY(-32px)" else "translateY(0)"};
                         transition:transform .16s ease, opacity .16s ease;
                         outline:${if (selected) "4px solid #f6d55c" else "0"};
                         border-radius:9px;
@@ -1881,4 +1945,9 @@ private fun SwissCard.rankLabel() = when (rank) {
     "Koenig" -> "K"
     "Ass" -> "A"
     else -> rank
+}
+
+private fun firstTouchY(touches: dynamic): Double? {
+    val touch = touches.item(0) ?: return null
+    return (touch.clientY as? Number)?.toDouble()
 }
