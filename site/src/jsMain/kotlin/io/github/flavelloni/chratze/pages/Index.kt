@@ -32,11 +32,11 @@ private enum class SwissSuit(
     Schelle("/suits/schelle.png", "#171717"),
 }
 
-private enum class Seat(val label: String) {
-    User("You"),
-    Player1("Player 1"),
-    Player2("Player 2"),
-    Player3("Player 3"),
+private enum class Seat(val label: String, val avatar: String) {
+    User("You", "🙂"),
+    Player1("Player 1", "😎"),
+    Player2("Player 2", "🤠"),
+    Player3("Player 3", "🧐"),
 }
 
 private enum class GamePhase {
@@ -77,7 +77,6 @@ private data class GameState(
     val phase: GamePhase = GamePhase.Idle,
     val hands: Map<Seat, List<SwissCard>> = emptyHands(),
     val drawPile: List<SwissCard> = deck,
-    val discardPile: List<SwissCard> = emptyList(),
     val trump: SwissCard? = null,
     val trick: List<PlayedCard> = emptyList(),
     val dealer: Seat = Seat.User,
@@ -207,7 +206,6 @@ private suspend fun dealNewRound(previous: GameState, setGame: (GameState) -> Un
         phase = GamePhase.Dealing,
         hands = emptyHands(),
         drawPile = shuffled,
-        discardPile = emptyList(),
         trump = null,
         trick = emptyList(),
         dealer = previous.dealer,
@@ -380,7 +378,6 @@ private suspend fun handleAllPassed(
         val current = state.copy(
             trump = nextTrump,
             drawPile = state.drawPile.drop(1),
-            discardPile = state.discardPile + listOfNotNull(state.trump),
             active = firstBidder,
             leader = firstBidder,
             speechBubbles = emptyMap(),
@@ -392,7 +389,6 @@ private suspend fun handleAllPassed(
         return current
     }
 
-    val allHandCards = seats.flatMap { state.hand(it) }
     var current = state.copy(
         hands = emptyHands(),
         activePlayers = emptySet(),
@@ -400,9 +396,9 @@ private suspend fun handleAllPassed(
         speechBubbles = emptyMap(),
         selectedExchangeIds = emptySet(),
         cardFlights = seats.flatMap { seat ->
-            state.hand(seat).toToiletFlights(fromSeat = seat, faceUp = seat == Seat.User)
+            state.hand(seat).toDeckFlights(fromSeat = seat, faceUp = seat == Seat.User)
         },
-        roundMessage = "Everyone passed three trumps. Cards go to the toilet and everyone adds CHF 1.",
+        roundMessage = "Everyone passed three trumps. Cards return to the deck and everyone adds CHF 1.",
     )
     setGame(current)
     delay(30)
@@ -419,7 +415,6 @@ private suspend fun handleAllPassed(
         bankrolls = current.bankrolls.applyMoneyEvents(anteEvents),
         pot = current.pot + seats.size * CHF,
         moneyEvents = anteEvents,
-        discardPile = current.discardPile + allHandCards + listOfNotNull(current.trump),
         trump = null,
         cardFlights = emptyList(),
         trumpAttempts = 0,
@@ -448,7 +443,7 @@ private suspend fun applyJoin(
             roundMessage = "${seat.label} calls.",
         )
     } else {
-        animateFoldToToilet(
+        animateFoldToDeck(
             state.copy(
                 speechBubbles = state.speechBubbles.plus(seat to "ich bin weg"),
                 roundMessage = "${seat.label} folds.",
@@ -474,7 +469,7 @@ private suspend fun applyJoin(
     }
 }
 
-private suspend fun animateFoldToToilet(
+private suspend fun animateFoldToDeck(
     state: GameState,
     seat: Seat,
     setGame: (GameState) -> Unit,
@@ -493,7 +488,7 @@ private suspend fun animateFoldToToilet(
         activePlayers = state.activePlayers - seat,
         outPlayers = state.outPlayers + seat,
         selectedExchangeIds = if (seat == Seat.User) emptySet() else state.selectedExchangeIds,
-        cardFlights = foldingCards.toToiletFlights(fromSeat = seat, faceUp = seat == Seat.User),
+        cardFlights = foldingCards.toDeckFlights(fromSeat = seat, faceUp = seat == Seat.User),
     )
     setGame(current)
     delay(30)
@@ -503,7 +498,6 @@ private suspend fun animateFoldToToilet(
     delay(260)
 
     current = current.copy(
-        discardPile = current.discardPile + foldingCards,
         cardFlights = emptyList(),
     )
     setGame(current)
@@ -532,7 +526,6 @@ private suspend fun exchangeCards(
     val selected = state.hand(seat).filter { it.id in selectedIds }.take(3)
     val kept = state.hand(seat).filterNot { card -> selected.any { it.id == card.id } }
     val drawn = state.drawPile.take(selected.size)
-    val nextDrawPile = state.drawPile.drop(selected.size)
     val nextActive = nextActiveCounterClockwise(seat, state.activePlayers)
     val starter = state.chratzer ?: seat
     val spoken = if (selected.isEmpty()) "keini" else "${selected.size} weg"
@@ -547,7 +540,7 @@ private suspend fun exchangeCards(
     if (selected.isNotEmpty()) {
         exchanged = exchanged.copy(
             hands = exchanged.hands.plus(seat to kept),
-            cardFlights = selected.toToiletFlights(fromSeat = seat, faceUp = seat == Seat.User),
+            cardFlights = selected.toDeckFlights(fromSeat = seat, faceUp = seat == Seat.User),
         )
         setGame(exchanged)
         delay(30)
@@ -557,26 +550,34 @@ private suspend fun exchangeCards(
         delay(260)
 
         exchanged = exchanged.copy(
-            discardPile = exchanged.discardPile + selected,
             cardFlights = emptyList(),
         )
         setGame(exchanged)
         delay(90)
 
-        exchanged = exchanged.copy(
-            cardFlights = drawn.fromDeckFlights(toSeat = seat, faceUp = seat == Seat.User),
-        )
-        setGame(exchanged)
-        delay(30)
+        drawn.forEach { card ->
+            exchanged = exchanged.copy(
+                cardFlights = listOf(card.fromDeckFlight(toSeat = seat, faceUp = seat == Seat.User)),
+            )
+            setGame(exchanged)
+            delay(30)
 
-        exchanged = exchanged.copy(cardFlights = exchanged.cardFlights.map { it.copy(arrived = true) })
-        setGame(exchanged)
-        delay(260)
+            exchanged = exchanged.copy(cardFlights = exchanged.cardFlights.map { it.copy(arrived = true) })
+            setGame(exchanged)
+            delay(210)
+
+            exchanged = exchanged.copy(
+                hands = exchanged.hands.plus(seat to exchanged.hand(seat) + card),
+                drawPile = exchanged.drawPile.drop(1),
+                cardFlights = emptyList(),
+            )
+            setGame(exchanged)
+            delay(55)
+        }
     }
 
     exchanged = exchanged.copy(
-        hands = exchanged.hands.plus(seat to kept + drawn),
-        drawPile = nextDrawPile,
+        hands = exchanged.hands.plus(seat to exchanged.hand(seat).ifEmpty { kept }),
         cardFlights = emptyList(),
     )
     setGame(exchanged)
@@ -922,8 +923,8 @@ private fun GameTable(
             "style",
             """
                 position:relative;
-                width:min(100%, 980px);
-                height:720px;
+                width:min(100%, 1160px);
+                height:clamp(560px, 82vh, 780px);
                 margin:0 auto;
                 cursor:${if (game.phase == GamePhase.TrickReview) "pointer" else "default"};
             """.trimIndent()
@@ -935,16 +936,16 @@ private fun GameTable(
                 """
                     position:absolute;
                     left:50%;
-                    top:51%;
-                    width:92%;
-                    height:74%;
+                    top:49%;
+                    width:96%;
+                    height:82%;
                     transform:translate(-50%, -50%);
                     border-radius:50%;
                     background:
                         radial-gradient(circle at 50% 43%, rgba(255,255,255,.14), transparent 38%),
                         linear-gradient(145deg, #3e8f63 0%, #236440 62%, #17462f 100%);
-                    border:10px solid #7a4d2c;
-                    box-shadow:0 28px 60px rgba(28,20,13,.28), inset 0 0 0 4px rgba(255,255,255,.16);
+                    border:5px solid #7a4d2c;
+                    box-shadow:0 22px 48px rgba(28,20,13,.24), inset 0 0 0 3px rgba(255,255,255,.14);
                     z-index:0;
                 """.trimIndent()
             )
@@ -964,7 +965,7 @@ private fun GameTable(
             dealer = game.dealer,
             out = Seat.Player1 in game.outPlayers,
             speech = game.speechBubbles[Seat.Player1],
-            position = "left:25%; top:22%;",
+            position = "left:23%; top:19%;",
         )
         PlayerArea(
             seat = Seat.Player2,
@@ -976,7 +977,7 @@ private fun GameTable(
             dealer = game.dealer,
             out = Seat.Player2 in game.outPlayers,
             speech = game.speechBubbles[Seat.Player2],
-            position = "left:50%; top:12%;",
+            position = "left:50%; top:10%;",
         )
         PlayerArea(
             seat = Seat.Player3,
@@ -988,14 +989,14 @@ private fun GameTable(
             dealer = game.dealer,
             out = Seat.Player3 in game.outPlayers,
             speech = game.speechBubbles[Seat.Player3],
-            position = "left:75%; top:22%;",
+            position = "left:77%; top:19%;",
         )
-        ToiletSpot(game.discardPile.size)
         TrumpCard(game.trump)
         UserStatus(game)
         TrickCards(game.trick, game.phase == GamePhase.Collecting, game.leader)
         UserHand(game, onUserCardClick)
         RoundControls(game, onNewRoundClick, onUserBid, onUserJoin, onUserExchangeConfirm)
+        SettlementModal(game, onNewRoundClick)
     }
 }
 
@@ -1007,24 +1008,24 @@ private fun PotArea(pot: Int) {
             """
                 position:absolute;
                 left:50%;
-                top:36%;
+                top:34%;
                 transform:translate(-50%, -50%);
                 z-index:2;
-                min-width:118px;
-                padding:9px 14px;
-                border-radius:8px;
-                color:#1b2638;
-                background:#f6d55c;
-                border:2px solid #fff8eb;
-                box-shadow:0 12px 24px rgba(0,0,0,.22);
+                min-width:72px;
+                padding:4px 8px;
+                border-radius:999px;
+                color:#fff8eb;
+                background:rgba(27,38,56,.74);
+                border:1px solid rgba(255,248,235,.42);
+                box-shadow:0 8px 16px rgba(0,0,0,.18);
                 text-align:center;
-                font-size:14px;
+                font-size:17px;
                 font-weight:900;
             """.trimIndent()
         )
     }) {
-        Div { Text("Pot") }
-        Div({ attr("style", "font-size:13px;font-weight:850;") }) { Text(pot.chf()) }
+        Div { Text("▰") }
+        Div({ attr("style", "font-size:11px;font-weight:850;line-height:1;") }) { Text(pot.chf()) }
     }
 }
 
@@ -1041,7 +1042,7 @@ private fun FlyingCards(cardFlights: List<CardFlight>) {
                     top:${position.second};
                     transform:translate(-50%, -50%) translate(${flight.offset}px, ${flight.offset / 2}px) rotate(${if (flight.arrived) "-8deg" else "6deg"});
                     transition:left .24s ease-in, top .24s ease-in, transform .24s ease-in, opacity .24s ease-in;
-                    opacity:${if (flight.arrived && flight.to == toiletPosition()) ".25" else "1"};
+                    opacity:${if (flight.arrived && flight.to == deckPosition()) ".25" else "1"};
                     z-index:8;
                     pointer-events:none;
                 """.trimIndent()
@@ -1085,8 +1086,6 @@ private fun FlyingDealCard(dealAnimation: DealAnimation?) {
 
 private fun deckPosition(): Pair<String, String> = "9%" to "43%"
 
-private fun toiletPosition(): Pair<String, String> = "91%" to "43%"
-
 private fun dealTargetPosition(seat: Seat): Pair<String, String> = when (seat) {
     Seat.User -> "50%" to "82%"
     Seat.Player1 -> "25%" to "27%"
@@ -1094,29 +1093,27 @@ private fun dealTargetPosition(seat: Seat): Pair<String, String> = when (seat) {
     Seat.Player3 -> "75%" to "27%"
 }
 
-private fun List<SwissCard>.toToiletFlights(fromSeat: Seat, faceUp: Boolean): List<CardFlight> =
+private fun List<SwissCard>.toDeckFlights(fromSeat: Seat, faceUp: Boolean): List<CardFlight> =
     mapIndexed { index, card ->
         CardFlight(
             card = card,
             from = dealTargetPosition(fromSeat),
-            to = toiletPosition(),
+            to = deckPosition(),
             arrived = false,
             faceUp = faceUp,
             offset = flightOffset(index),
         )
     }
 
-private fun List<SwissCard>.fromDeckFlights(toSeat: Seat, faceUp: Boolean): List<CardFlight> =
-    mapIndexed { index, card ->
-        CardFlight(
-            card = card,
-            from = deckPosition(),
-            to = dealTargetPosition(toSeat),
-            arrived = false,
-            faceUp = faceUp,
-            offset = flightOffset(index),
-        )
-    }
+private fun SwissCard.fromDeckFlight(toSeat: Seat, faceUp: Boolean): CardFlight =
+    CardFlight(
+        card = this,
+        from = deckPosition(),
+        to = dealTargetPosition(toSeat),
+        arrived = false,
+        faceUp = faceUp,
+        offset = 0,
+    )
 
 private fun flightOffset(index: Int): Int = (index - 1) * 10
 
@@ -1162,8 +1159,8 @@ private fun PlayerArea(
                     display:flex;
                     flex-direction:column;
                     align-items:center;
-                    gap:10px;
-                    width:168px;
+                    gap:6px;
+                    width:112px;
                     opacity:${if (out) ".48" else "1"};
                 """.trimIndent()
             )
@@ -1171,21 +1168,33 @@ private fun PlayerArea(
             if (speech != null) {
                 SpeechBubble(speech)
             }
-            ComputerPlayerIcon(seat.label, score, bankroll, moneyEvent, active == seat, dealer == seat, out)
+            ComputerPlayerIcon(seat, score, bankroll, moneyEvent, active == seat, dealer == seat, out)
             Div({
                 attr(
                     "style",
                     """
                         display:flex;
                         justify-content:center;
-                        gap:4px;
+                        gap:0;
                         width:100%;
-                        min-height:48px;
+                        min-height:42px;
                     """.trimIndent()
                 )
             }) {
-                repeat(cardCount) {
-                    FaceDownCard(width = 34, height = 48)
+                repeat(cardCount) { index ->
+                    Div({
+                        attr(
+                            "style",
+                            """
+                                margin-left:${if (index == 0) "0" else "-18px"};
+                                transform:rotate(${(index - cardCount / 2) * 5}deg);
+                                transform-origin:50% 100%;
+                                z-index:${index};
+                            """.trimIndent()
+                        )
+                    }) {
+                        FaceDownCard(width = 32, height = 45)
+                    }
                 }
             }
         }
@@ -1224,7 +1233,7 @@ private fun SpeechBubble(text: String) {
 
 @Composable
 private fun ComputerPlayerIcon(
-    name: String,
+    seat: Seat,
     score: Int,
     bankroll: Int,
     moneyEvent: Int?,
@@ -1237,32 +1246,49 @@ private fun ComputerPlayerIcon(
             "style",
             """
                 position:relative;
-                width:76px;
-                height:86px;
+                width:58px;
+                height:58px;
                 border-radius:50%;
                 display:flex;
                 flex-direction:column;
                 align-items:center;
                 justify-content:center;
-                padding:9px;
+                padding:5px;
                 box-sizing:border-box;
                 text-align:center;
-                font-size:14px;
+                font-size:26px;
                 line-height:1.12;
                 font-weight:780;
-                color:#f9f2e8;
-                background:${if (out) "linear-gradient(145deg, #687077, #343b42)" else "linear-gradient(145deg, #394355, #161d29)"};
-                border:3px solid ${if (active) "#f6d55c" else "rgba(255,255,255,.42)"};
-                box-shadow:0 12px 24px rgba(0,0,0,.24);
+                color:#1b2638;
+                background:${if (out) "#d8dde2" else "#fff8eb"};
+                border:2px solid ${if (active) "#f6d55c" else "rgba(255,255,255,.62)"};
+                box-shadow:0 9px 18px rgba(0,0,0,.2);
             """.trimIndent()
         )
     }) {
         if (dealer) DealerBadge()
-        Text(name)
-        Div({ attr("style", "font-size:12px;opacity:.82;margin-top:3px;") }) {
-            Text(if (out) "out" else "$score tricks")
+        Text(seat.avatar)
+        Div({
+            attr(
+                "style",
+                """
+                    position:absolute;
+                    left:50%;
+                    top:60px;
+                    transform:translateX(-50%);
+                    min-width:88px;
+                    color:#fff8eb;
+                    font-size:11px;
+                    line-height:1.15;
+                    font-weight:850;
+                    text-shadow:0 1px 2px rgba(0,0,0,.45);
+                    white-space:nowrap;
+                """.trimIndent()
+            )
+        }) {
+            Text("${seat.label} · ${if (out) "out" else "$score"} · ${bankroll.chf()}")
         }
-        Div({ attr("style", "font-size:11px;opacity:.9;margin-top:1px;") }) {
+        Div({ attr("style", "display:none;") }) {
             Text(bankroll.chf())
         }
         if (moneyEvent != null) {
@@ -1374,50 +1400,6 @@ private fun FaceDownCard(width: Int, height: Int) {
             """.trimIndent()
         )
     })
-}
-
-@Composable
-private fun ToiletSpot(discardCount: Int) {
-    TableSpot("left:91%; top:43%;") {
-        Div({
-            attr(
-                "style",
-                """
-                    display:flex;
-                    flex-direction:column;
-                    align-items:center;
-                    gap:5px;
-                    color:#fff8eb;
-                    font-size:12px;
-                    font-weight:800;
-                    text-shadow:0 1px 2px rgba(0,0,0,.3);
-                """.trimIndent()
-            )
-        }) {
-            Div({
-                attr(
-                    "style",
-                    """
-                        width:74px;
-                        height:74px;
-                        border-radius:50%;
-                        display:flex;
-                        align-items:center;
-                        justify-content:center;
-                        background:#f8fffb;
-                        border:3px solid #d9f2e9;
-                        box-shadow:0 12px 24px rgba(0,0,0,.2);
-                    """.trimIndent()
-                )
-            }) {
-                Img(src = BasePath.prependTo("/elements/toilet-bowl-svgrepo-com.svg"), attrs = {
-                    attr("alt", "Toilet")
-                    attr("style", "display:block;width:48px;height:48px;object-fit:contain;")
-                })
-            }
-            Text("$discardCount cards")
-        }
-    }
 }
 
 @Composable
@@ -1537,28 +1519,8 @@ private fun RoundControls(
             """.trimIndent()
         )
     }) {
-        Div({
-            attr(
-                "style",
-                """
-                    max-width:360px;
-                    padding:10px 14px;
-                    border-radius:8px;
-                    color:#fff8eb;
-                    background:rgba(27,38,56,.94);
-                    box-shadow:0 12px 26px rgba(0,0,0,.2);
-                    font-size:14px;
-                    line-height:1.25;
-                    font-weight:800;
-                    text-align:center;
-                """.trimIndent()
-            )
-        }) {
-            Text(game.roundMessage)
-        }
-
         when {
-            game.phase == GamePhase.Idle || game.phase == GamePhase.Finished || game.phase == GamePhase.Settlement -> {
+            game.phase == GamePhase.Idle || game.phase == GamePhase.Finished -> {
                 PrimaryButton(if (game.phase == GamePhase.Idle) "Start new round" else "Next round", onNewRoundClick)
             }
 
@@ -1579,6 +1541,131 @@ private fun RoundControls(
             game.phase == GamePhase.Exchanging && game.active == Seat.User -> {
                 PrimaryButton("Exchange ${game.selectedExchangeIds.size}") { onUserExchangeConfirm() }
             }
+
+            game.phase == GamePhase.TrickReview -> {
+                Div({
+                    attr(
+                        "style",
+                        """
+                            padding:7px 10px;
+                            border-radius:999px;
+                            color:#fff8eb;
+                            background:rgba(27,38,56,.76);
+                            font-size:12px;
+                            font-weight:850;
+                            box-shadow:0 8px 16px rgba(0,0,0,.16);
+                        """.trimIndent()
+                    )
+                }) {
+                    Text("Tap table")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettlementModal(game: GameState, onNewRoundClick: () -> Unit) {
+    if (game.phase != GamePhase.Settlement) return
+
+    Div({
+        attr(
+            "style",
+            """
+                position:absolute;
+                left:50%;
+                top:8%;
+                transform:translateX(-50%);
+                width:min(92vw, 520px);
+                z-index:10;
+                padding:16px;
+                border-radius:8px;
+                color:#1f1a14;
+                background:#fffaf0;
+                border:1px solid rgba(36,28,21,.16);
+                box-shadow:0 22px 50px rgba(0,0,0,.32);
+            """.trimIndent()
+        )
+    }) {
+        Div({
+            attr(
+                "style",
+                """
+                    display:flex;
+                    align-items:center;
+                    justify-content:space-between;
+                    gap:12px;
+                    margin-bottom:12px;
+                """.trimIndent()
+            )
+        }) {
+            Div {
+                Div({ attr("style", "font-size:18px;font-weight:900;line-height:1.1;") }) {
+                    Text("Round settled")
+                }
+                Div({ attr("style", "font-size:12px;color:#6d6259;font-weight:750;margin-top:3px;") }) {
+                    Text("Next pot ${game.pot.chf()}")
+                }
+            }
+            PrimaryButton("Next round", onNewRoundClick)
+        }
+
+        Div({
+            attr(
+                "style",
+                """
+                    display:grid;
+                    grid-template-columns:repeat(2, minmax(0, 1fr));
+                    gap:8px;
+                """.trimIndent()
+            )
+        }) {
+            seats.forEach { seat ->
+                SettlementPlayerCard(game, seat)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettlementPlayerCard(game: GameState, seat: Seat) {
+    val amount = game.moneyEvents[seat] ?: 0
+    Div({
+        attr(
+            "style",
+            """
+                display:flex;
+                align-items:center;
+                gap:8px;
+                min-width:0;
+                padding:8px;
+                border-radius:8px;
+                background:${if (amount >= 0) "#f1fbf4" else "#fff1ee"};
+                border:1px solid ${if (amount >= 0) "#cdebd6" else "#ffd0c8"};
+            """.trimIndent()
+        )
+    }) {
+        Div({ attr("style", "font-size:26px;line-height:1;") }) { Text(seat.avatar) }
+        Div({ attr("style", "min-width:0;flex:1;") }) {
+            Div({ attr("style", "font-size:12px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;") }) {
+                Text(seat.label)
+            }
+            Div({ attr("style", "font-size:11px;color:#655c53;line-height:1.2;") }) {
+                Text("${game.score(seat)} tricks · ${game.bankrolls.getValueOrZero(seat).chf()}")
+            }
+        }
+        Div({
+            attr(
+                "style",
+                """
+                    font-size:12px;
+                    font-weight:950;
+                    color:${if (amount >= 0) "#126334" else "#8a2520"};
+                    white-space:nowrap;
+                """.trimIndent()
+            )
+        }) {
+            Text("${if (amount >= 0) "+" else ""}${amount.chf()}")
         }
     }
 }
@@ -1687,14 +1774,14 @@ private fun UserHand(game: GameState, onUserCardClick: (SwissCard) -> Unit) {
                 display:flex;
                 align-items:flex-end;
                 justify-content:center;
-                gap:14px;
-                width:min(92%, 600px);
-                min-height:146px;
+                gap:0;
+                width:min(98vw, 680px);
+                min-height:170px;
                 z-index:3;
             """.trimIndent()
         )
     }) {
-        game.hand(Seat.User).forEach { card ->
+        game.hand(Seat.User).forEachIndexed { index, card ->
             val legal = legalIds.contains(card.id)
             val selected = card.id in game.selectedExchangeIds
             val clickable = legal || exchangeSelectable
@@ -1706,15 +1793,17 @@ private fun UserHand(game: GameState, onUserCardClick: (SwissCard) -> Unit) {
                     "style",
                     """
                         cursor:${if (clickable) "pointer" else "default"};
+                        margin-left:${if (index == 0) "0" else "clamp(-56px, calc((430px - 100vw) * -1), 14px)"};
                         opacity:${if (game.phase == GamePhase.Playing && game.active == Seat.User && !legal) ".45" else "1"};
                         transform:${if (selected) "translateY(-18px)" else "translateY(0)"};
                         transition:transform .16s ease, opacity .16s ease;
                         outline:${if (selected) "4px solid #f6d55c" else "0"};
                         border-radius:9px;
+                        z-index:$index;
                     """.trimIndent()
                 )
             }) {
-                CardView(card, width = 104, height = 146, clickable = clickable)
+                CardView(card, width = 118, height = 166, clickable = clickable)
             }
         }
     }
