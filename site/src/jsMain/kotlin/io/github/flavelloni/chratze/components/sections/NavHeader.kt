@@ -36,18 +36,23 @@ import io.github.flavelloni.chratze.components.widgets.IconButton
 import io.github.flavelloni.chratze.toSitePalette
 
 val NavHeaderStyle = CssStyle.base {
-    Modifier.fillMaxWidth().padding(1.cssRem)
+    Modifier.fillMaxWidth().padding(leftRight = 0.75.cssRem, topBottom = 0.35.cssRem)
 }
 
 @Composable
-private fun NavLink(path: String, text: String) {
-    Link(path, text, variant = UndecoratedLinkVariant.then(UncoloredLinkVariant))
+private fun NavLink(path: String, text: String, onNavigate: (() -> Unit)? = null) {
+    Link(
+        path,
+        text,
+        Modifier.onClick { onNavigate?.invoke() },
+        variant = UndecoratedLinkVariant.then(UncoloredLinkVariant),
+    )
 }
 
 @Composable
-private fun MenuItems() {
-    NavLink("/", "Home")
-    NavLink("/about", "About")
+private fun MenuItems(onNavigate: (() -> Unit)? = null) {
+    NavLink("/", "Home", onNavigate)
+    NavLink("/about", "About", onNavigate)
 }
 
 @Composable
@@ -100,9 +105,11 @@ enum class SideMenuState {
 @Composable
 fun NavHeader() {
     Row(NavHeaderStyle.toModifier(), verticalAlignment = Alignment.CenterVertically) {
-        Link("https://kobweb.varabyte.com") {
-            // Block display overrides inline display of the <img> tag, so it calculates centering better
-            Image("/kobweb-logo.png", "Kobweb Logo", Modifier.height(2.cssRem).display(DisplayStyle.Block))
+        Link("/", variant = UndecoratedLinkVariant.then(UncoloredLinkVariant)) {
+            Row(Modifier.gap(0.45.cssRem), verticalAlignment = Alignment.CenterVertically) {
+                SuitLogo()
+                org.jetbrains.compose.web.dom.Text("Chratze")
+            }
         }
 
         Spacer()
@@ -168,9 +175,25 @@ private fun SideMenu(menuState: SideMenuState, close: () -> Unit, onAnimationEnd
             ) {
                 CloseButton(onClick = { close() })
                 Column(Modifier.padding(right = 0.75.cssRem).gap(1.5.cssRem).fontSize(1.4.cssRem), horizontalAlignment = Alignment.End) {
-                    MenuItems()
+                    MenuItems(onNavigate = { close() })
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SuitLogo() {
+    Row(Modifier.gap(0.08.cssRem), verticalAlignment = Alignment.CenterVertically) {
+        listOf("eichle", "rose", "schilte", "schelle").forEach { suit ->
+            Image(
+                "/suits/$suit.png",
+                suit,
+                Modifier
+                    .width(1.cssRem)
+                    .height(1.cssRem)
+                    .display(DisplayStyle.Block)
+            )
         }
     }
 }

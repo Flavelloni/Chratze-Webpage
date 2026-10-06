@@ -2,9 +2,11 @@ package io.github.flavelloni.chratze
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import com.varabyte.kobweb.compose.css.Overflow
 import com.varabyte.kobweb.compose.css.ScrollBehavior
 import com.varabyte.kobweb.compose.ui.Modifier
 import com.varabyte.kobweb.compose.ui.modifiers.minHeight
+import com.varabyte.kobweb.compose.ui.modifiers.overflow
 import com.varabyte.kobweb.compose.ui.modifiers.scrollBehavior
 import com.varabyte.kobweb.core.App
 import com.varabyte.kobweb.silk.SilkApp
@@ -31,6 +33,11 @@ fun initColorMode(ctx: InitSilkContext) {
 fun initStyles(ctx: InitSilkContext) {
     ctx.stylesheet.apply {
         registerStyleBase("body") { Modifier.scrollBehavior(ScrollBehavior.Smooth) }
+        registerStyleBase("html, body") {
+            Modifier
+                .minHeight(100.vh)
+                .overflow(Overflow.Hidden)
+        }
     }
 }
 

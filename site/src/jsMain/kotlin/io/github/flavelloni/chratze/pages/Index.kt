@@ -124,6 +124,9 @@ fun HomePage() {
                 flex-direction:column;
                 gap:0;
                 width:100%;
+                height:100%;
+                flex:1 1 auto;
+                min-height:0;
                 padding:0 0 8px;
             """.trimIndent()
         )
@@ -886,9 +889,11 @@ private fun GameTable(
             "style",
             """
                 position:relative;
-                width:min(100vw, 1220px);
-                height:clamp(620px, 94vh, 860px);
-                margin:-8px auto 0;
+                width:100%;
+                height:100%;
+                min-height:0;
+                overflow:hidden;
+                margin:0 auto;
                 cursor:${if (game.phase == GamePhase.TrickReview) "pointer" else "default"};
             """.trimIndent()
         )
@@ -900,8 +905,8 @@ private fun GameTable(
                     position:absolute;
                     left:50%;
                     top:49%;
-                    width:102%;
-                    height:90%;
+                    width:min(104vw, 1220px);
+                    height:96%;
                     transform:translate(-50%, -50%);
                     border-radius:50%;
                     background:
@@ -1215,8 +1220,8 @@ private fun ComputerPlayerIcon(
             "style",
             """
                 position:relative;
-                width:42px;
-                height:42px;
+                width:clamp(50px, 5.6vw, 72px);
+                height:clamp(50px, 5.6vw, 72px);
                 border-radius:50%;
                 display:flex;
                 flex-direction:column;
@@ -1225,7 +1230,7 @@ private fun ComputerPlayerIcon(
                 padding:0;
                 box-sizing:border-box;
                 text-align:center;
-                font-size:30px;
+                font-size:clamp(38px, 5vw, 58px);
                 line-height:1.12;
                 font-weight:780;
                 color:#1b2638;
@@ -1244,7 +1249,7 @@ private fun ComputerPlayerIcon(
                 """
                     position:absolute;
                     left:50%;
-                    top:38px;
+                    top:calc(100% + 1px);
                     transform:translateX(-50%);
                     display:flex;
                     align-items:center;
@@ -1259,9 +1264,6 @@ private fun ComputerPlayerIcon(
             )
         }) {
             Text("💰 ${bankroll.chf().removePrefix("CHF ")}")
-        }
-        if (moneyEvent != null) {
-            MoneyChange(moneyEvent)
         }
     }
 }
@@ -1407,9 +1409,8 @@ private fun UserStatus(game: GameState) {
             "style",
             """
                 position:absolute;
-                left:50%;
-                bottom:168px;
-                transform:translateX(-50%);
+                right:5%;
+                bottom:33%;
                 z-index:5;
                 display:flex;
                 align-items:center;
@@ -1434,7 +1435,6 @@ private fun UserStatus(game: GameState) {
         }) {
             if (game.dealer == Seat.User) DealerBadge()
             Text("${Seat.User.label}: ${if (Seat.User in game.outPlayers) "out" else "${game.score(Seat.User)} tricks"} | ${game.bankrolls.getValueOrZero(Seat.User).chf()}")
-            game.moneyEvents[Seat.User]?.let { MoneyChange(it) }
         }
         game.speechBubbles[Seat.User]?.let { SpeechBubbleInline(it) }
     }
@@ -1494,39 +1494,22 @@ private fun RoundControls(
             }
 
             game.phase == GamePhase.CallingChratze && game.active == Seat.User -> {
-                Div({ attr("style", "display:flex;gap:10px;") }) {
-                    PrimaryButton("chratze") { onUserBid(true) }
-                    SecondaryButton("lose") { onUserBid(false) }
+                Div({ attr("style", "display:flex;flex-direction:column;gap:9px;min-width:145px;") }) {
+                    ActionButton("chratze", "#1f7a46", "#f3fff7") { onUserBid(true) }
+                    ActionButton("lose", "#a7372f", "#fff7f5") { onUserBid(false) }
                 }
             }
 
             game.phase == GamePhase.CallingAlong && game.active == Seat.User -> {
-                Div({ attr("style", "display:flex;gap:10px;") }) {
-                    PrimaryButton("chume mit") { onUserJoin(true) }
-                    SecondaryButton("ich bin weg") { onUserJoin(false) }
+                Div({ attr("style", "display:flex;flex-direction:column;gap:9px;min-width:145px;") }) {
+                    ActionButton("chume mit", "#1f7a46", "#f3fff7") { onUserJoin(true) }
+                    ActionButton("ich bin weg", "#a7372f", "#fff7f5") { onUserJoin(false) }
                 }
             }
 
-            game.phase == GamePhase.Exchanging && game.active == Seat.User && game.selectedExchangeIds.isEmpty() -> {
-                SecondaryButton("Keep all") { onUserExchangeConfirm() }
-            }
-
-            game.phase == GamePhase.TrickReview -> {
-                Div({
-                    attr(
-                        "style",
-                        """
-                            padding:7px 10px;
-                            border-radius:999px;
-                            color:#fff8eb;
-                            background:rgba(27,38,56,.76);
-                            font-size:12px;
-                            font-weight:850;
-                            box-shadow:0 8px 16px rgba(0,0,0,.16);
-                        """.trimIndent()
-                    )
-                }) {
-                    Text("Tap table")
+            game.phase == GamePhase.Exchanging && game.active == Seat.User -> {
+                SecondaryButton(if (game.selectedExchangeIds.isEmpty()) "Keep all" else "Exchange ${game.selectedExchangeIds.size}") {
+                    onUserExchangeConfirm()
                 }
             }
         }
@@ -1538,6 +1521,7 @@ private fun SettlementModal(game: GameState, onNewRoundClick: () -> Unit) {
     if (game.phase != GamePhase.Settlement) return
 
     Div({
+        onClick { onNewRoundClick() }
         attr(
             "style",
             """
@@ -1555,6 +1539,7 @@ private fun SettlementModal(game: GameState, onNewRoundClick: () -> Unit) {
                 background:#fffaf0;
                 border:1px solid rgba(36,28,21,.16);
                 box-shadow:0 22px 50px rgba(0,0,0,.32);
+                cursor:pointer;
             """.trimIndent()
         )
     }) {
@@ -1564,7 +1549,7 @@ private fun SettlementModal(game: GameState, onNewRoundClick: () -> Unit) {
                 """
                     display:flex;
                     align-items:center;
-                    justify-content:space-between;
+                    justify-content:flex-start;
                     gap:12px;
                     margin-bottom:10px;
                 """.trimIndent()
@@ -1578,7 +1563,6 @@ private fun SettlementModal(game: GameState, onNewRoundClick: () -> Unit) {
                     Text("Next pot ${game.pot.chf()}")
                 }
             }
-            PrimaryButton("Next round", onNewRoundClick)
         }
 
         Div({
@@ -1737,6 +1721,29 @@ private fun PrimaryButton(label: String, onClick: () -> Unit) {
 }
 
 @Composable
+private fun ActionButton(label: String, background: String, color: String, onClick: () -> Unit) {
+    Button(attrs = {
+        onClick { onClick() }
+        attr(
+            "style",
+            """
+                border:0;
+                border-radius:8px;
+                padding:12px 15px;
+                font-size:15px;
+                font-weight:900;
+                color:$color;
+                background:$background;
+                box-shadow:0 10px 20px rgba(0,0,0,.2);
+                cursor:pointer;
+            """.trimIndent()
+        )
+    }) {
+        Text(label)
+    }
+}
+
+@Composable
 private fun SecondaryButton(label: String, onClick: () -> Unit) {
     Button(attrs = {
         onClick { onClick() }
@@ -1803,7 +1810,6 @@ private fun UserHand(
     onUserCardClick: (SwissCard) -> Unit,
     onUserExchangeConfirm: () -> Unit,
 ) {
-    var touchStartY by remember { mutableStateOf<Double?>(null) }
     val legalIds = if (game.phase == GamePhase.Playing && game.active == Seat.User && game.trump != null) {
         legalCards(game.hand(Seat.User), game.trick, game.trump.suit).map { it.id }.toSet()
     } else {
@@ -1836,22 +1842,6 @@ private fun UserHand(
             Div({
                 if (clickable) {
                     onClick { onUserCardClick(card) }
-                }
-                if (exchangeSelectable && selected) {
-                    attr("draggable", "true")
-                    attr("title", "Swipe toward the table to exchange selected cards")
-                    onDragEnd { onUserExchangeConfirm() }
-                    onTouchStart { event ->
-                        touchStartY = firstTouchY(event.touches)
-                    }
-                    onTouchEnd { event ->
-                        val startY = touchStartY
-                        val endY = firstTouchY(event.changedTouches)
-                        touchStartY = null
-                        if (startY != null && endY != null && startY - endY > 34.0) {
-                            onUserExchangeConfirm()
-                        }
-                    }
                 }
                 attr(
                     "style",
@@ -1945,9 +1935,4 @@ private fun SwissCard.rankLabel() = when (rank) {
     "Koenig" -> "K"
     "Ass" -> "A"
     else -> rank
-}
-
-private fun firstTouchY(touches: dynamic): Double? {
-    val touch = touches.item(0) ?: return null
-    return (touch.clientY as? Number)?.toDouble()
 }
