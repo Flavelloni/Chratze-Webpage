@@ -17,6 +17,7 @@ kotlin-js-store
 /.idea/assetWizardSettings.xml
 /.idea/artifacts
 /.idea/compiler.xml
+/.idea/misc.xml
 /.idea/jarRepositories.xml
 /.idea/*.iml
 /.idea/modules
